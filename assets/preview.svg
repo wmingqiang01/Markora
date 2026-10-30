@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 650" width="1080" height="650" role="img" aria-label="Markora macOS WYSIWYG Markdown Editor Preview">
+  <defs>
+    <!-- Soft studio backdrop gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eef2ff" />
+      <stop offset="50%" stop-color="#f8fafc" />
+      <stop offset="100%" stop-color="#e0f2fe" />
+    </linearGradient>
+
+    <!-- Subtle ambient glow -->
+    <radialGradient id="glowBlue" cx="75%" cy="22%" r="48%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- macOS Window Shadow -->
+    <filter id="winShadow" x="-6%" y="-5%" width="112%" height="114%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0f172a" flood-opacity="0.16" />
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.06" />
+    </filter>
+
+    <!-- Window Clip -->
+    <clipPath id="winClip">
+      <rect x="48" y="36" width="984" height="578" rx="14" />
+    </clipPath>
+  </defs>
+
+  <!-- Studio Canvas Backdrop -->
+  <rect width="1080" height="650" rx="20" fill="url(#bgGrad)" />
+  <rect width="1080" height="650" rx="20" fill="url(#glowBlue)" />
+
+  <!-- macOS Native Window Shell -->
+  <g filter="url(#winShadow)">
+    <rect x="48" y="36" width="984" height="578" rx="14" fill="#ffffff" />
+  </g>
+
+  <g clip-path="url(#winClip)" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', sans-serif">
+    <!-- Left Sidebar Surface -->
+    <rect x="48" y="36" width="236" height="578" fill="#f8fafc" />
+    <line x1="284" y1="36" x2="284" y2="614" stroke="#e5e7eb" stroke-width="1" />
+
+    <!-- Top Unified Titlebar -->
+    <rect x="48" y="36" width="984" height="44" fill="#ffffff" fill-opacity="0.88" />
+    <rect x="48" y="36" width="236" height="44" fill="#f8fafc" />
+    <line x1="48" y1="80" x2="1032" y2="80" stroke="#e5e7eb" stroke-width="1" />
+
+    <!-- macOS Traffic Lights -->
+    <circle cx="72" cy="58" r="6" fill="#ff5f56" stroke="#e0443e" stroke-width="0.5" />
+    <circle cx="92" cy="58" r="6" fill="#ffbd2e" stroke="#dea123" stroke-width="0.5" />
+    <circle cx="112" cy="58" r="6" fill="#27c93f" stroke="#1aab29" stroke-width="0.5" />
+
+    <!-- Sidebar Toggle Icon -->
+    <rect x="252" y="50" width="18" height="15" rx="3" fill="none" stroke="#64748b" stroke-width="1.4" />
+    <line x1="258" y1="50" x2="258" y2="65" stroke="#64748b" stroke-width="1.4" />
+
+    <!-- Document Title & Saved Dot -->
+    <text x="306" y="62" font-size="13" font-weight="600" fill="#1e293b">01-欢迎使用Markora.md</text>
+    <circle cx="464" cy="58" r="3.5" fill="#10b981" />
+    <text x="475" y="62" font-size="11.5" fill="#94a3b8">已实时同步 · 1,284 字</text>
+
+    <!-- Right Toolbar Pills -->
+    <g transform="translate(756, 46)">
+      <rect x="0" y="0" width="56" height="24" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1" />
+      <text x="28" y="16" font-size="11" font-weight="600" fill="#2563eb" text-anchor="middle">¶ 标记</text>
+
+      <rect x="64" y="0" width="52" height="24" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" />
+      <text x="90" y="16" font-size="11" font-weight="500" fill="#475569" text-anchor="middle">&lt;/&gt; 源码</text>
+
+      <rect x="124" y="0" width="64" height="24" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" />
+      <text x="156" y="16" font-size="11" font-weight="500" fill="#475569" text-anchor="middle">跟随系统</text>
+
+      <rect x="196" y="0" width="60" height="24" rx="6" fill="#1e293b" />
+      <text x="226" y="16" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">导出 PDF</text>
+    </g>
+
+    <!-- Sidebar Segmented Tabs (文件 / 大纲 / 历史) -->
+    <rect x="62" y="92" width="208" height="28" rx="7" fill="#eef2f6" />
+    <rect x="65" y="95" width="67" height="22" rx="5" fill="#ffffff" />
+    <text x="98.5" y="110" font-size="11.5" font-weight="600" fill="#0f172a" text-anchor="middle">文件</text>
+    <text x="166" y="110" font-size="11.5" font-weight="500" fill="#64748b" text-anchor="middle">大纲</text>
+    <text x="234" y="110" font-size="11.5" font-weight="500" fill="#64748b" text-anchor="middle">历史</text>
+
+    <!-- Workspace Folder Header -->
+    <text x="66" y="144" font-size="10.5" font-weight="700" fill="#94a3b8" letter-spacing="0.6">WORKSPACE · 知识库</text>
+
+    <!-- File Tree Items -->
+    <g transform="translate(60, 156)">
+      <!-- Active File -->
+      <rect x="0" y="0" width="212" height="30" rx="7" fill="#eff6ff" />
+      <rect x="0" y="6" width="3" height="18" rx="1.5" fill="#2563eb" />
+      <text x="14" y="19.5" font-size="12.5" font-weight="600" fill="#1d4ed8">📄 01-欢迎使用Markora.md</text>
+
+      <!-- File 2 -->
+      <text x="14" y="51" font-size="12.5" fill="#334155">📄 02-数学与图表展示.md</text>
+
+      <!-- Folder -->
+      <text x="14" y="83" font-size="12.5" font-weight="600" fill="#475569">▾ 📁 架构设计笔记</text>
+      <text x="30" y="112" font-size="12" fill="#475569">📄 极简写作法则.md</text>
+      <text x="30" y="139" font-size="12" fill="#475569">📄 FSEvents实时同步.md</text>
+      <text x="30" y="166" font-size="12" fill="#475569">📄 离线渲染引擎.md</text>
+    </g>
+
+    <!-- Sidebar Outline Mini Preview Card -->
+    <line x1="62" y1="362" x2="270" y2="362" stroke="#e2e8f0" stroke-width="1" />
+    <text x="66" y="384" font-size="10.5" font-weight="700" fill="#94a3b8" letter-spacing="0.6">OUTLINE · 章节联动</text>
+    <rect x="64" y="396" width="2.5" height="96" rx="1.25" fill="#e2e8f0" />
+    <rect x="64" y="396" width="2.5" height="24" rx="1.25" fill="#2563eb" />
+    <text x="76" y="412" font-size="12" font-weight="600" fill="#2563eb">Markora 极简写作体验</text>
+    <text x="86" y="438" font-size="11.5" fill="#64748b">实时语法高亮代码块</text>
+    <text x="86" y="462" font-size="11.5" fill="#64748b">离线 LaTeX 与 Mermaid</text>
+    <text x="86" y="486" font-size="11.5" fill="#64748b">双向无损本地文件流</text>
+
+    <!-- Sidebar Bottom Quick Search Hint -->
+    <rect x="62" y="566" width="208" height="32" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" />
+    <text x="76" y="586" font-size="11.5" fill="#94a3b8">🔍 快速跳转与搜索...</text>
+    <rect x="224" y="573" width="38" height="18" rx="4" fill="#f1f5f9" />
+    <text x="243" y="585.5" font-size="10" font-weight="600" fill="#64748b" text-anchor="middle">⌘ P</text>
+
+    <!-- ================= MAIN WYSIWYG CANVAS ================= -->
+    <g transform="translate(344, 114)">
+      <!-- H1 Heading -->
+      <text x="0" y="28" font-size="27" font-weight="800" fill="#0f172a" letter-spacing="-0.4">Markora：让注意力回归文字本身</text>
+      <line x1="0" y1="44" x2="628" y2="44" stroke="#f1f5f9" stroke-width="1.5" />
+
+      <!-- Paragraph with live inline formatting -->
+      <text x="0" y="74" font-size="14.5" fill="#334155">
+        基于 macOS 原生 <tspan font-weight="700" fill="#0f172a">Cocoa + WebKit</tspan> 打造，将实时排版预览与纯文本无损存储合二为一。支持行内代码
+      </text>
+      <rect x="0" y="86" width="96" height="21" rx="4" fill="#f1f5f9" />
+      <text x="8" y="100.5" font-family="'SF Mono', Menlo, monospace" font-size="12" fill="#db2777">FSEvents 同步</text>
+      <text x="104" y="101" font-size="14.5" fill="#334155">、粘贴图片自动归档至本地 <tspan font-family="'SF Mono', Menlo, monospace" font-size="12.5" fill="#2563eb">./assets/</tspan>，毫秒级瞬时启动。</text>
+
+      <!-- GitHub-style Callout Block (> [!TIP]) -->
+      <g transform="translate(0, 122)">
+        <rect x="0" y="0" width="628" height="58" rx="8" fill="#eff6ff" />
+        <rect x="0" y="0" width="4" height="58" rx="2" fill="#2563eb" />
+        <text x="18" y="23" font-size="12.5" font-weight="700" fill="#1d4ed8">💡 焦点段落智能标记感知</text>
+        <text x="18" y="44" font-size="13" fill="#334155">点击任意段落自动展开轻量 Markdown 标记并精准定位光标；离开后立即恢复纯净阅读排版。</text>
+      </g>
+
+      <!-- Syntax Highlighted Code Block -->
+      <g transform="translate(0, 198)">
+        <rect x="0" y="0" width="628" height="122" rx="10" fill="#0f172a" />
+        <!-- Code Header -->
+        <rect x="0" y="0" width="628" height="30" rx="10" fill="#1e293b" />
+        <rect x="0" y="20" width="628" height="10" fill="#1e293b" />
+        <text x="16" y="19.5" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#94a3b8">swift · 原生双架构极速渲染</text>
+        <rect x="566" y="6" width="48" height="18" rx="4" fill="#334155" />
+        <text x="590" y="18" font-size="10.5" fill="#e2e8f0" text-anchor="middle">复制</text>
+
+        <!-- Line Numbers -->
+        <g font-family="'SF Mono', Menlo, monospace" font-size="12.5" fill="#475569" text-anchor="end">
+          <text x="28" y="54">1</text>
+          <text x="28" y="77">2</text>
+          <text x="28" y="100">3</text>
+        </g>
+        <line x1="40" y1="36" x2="40" y2="112" stroke="#1e293b" stroke-width="1" />
+
+        <!-- Highlighted Code Lines -->
+        <g font-family="'SF Mono', Menlo, monospace" font-size="12.5">
+          <text x="54" y="54"><tspan fill="#c084fc">func</tspan> <tspan fill="#60a5fa">syncDocument</tspan><tspan fill="#e2e8f0">(path: </tspan><tspan fill="#34d399">String</tspan><tspan fill="#e2e8f0">) -&gt; </tspan><tspan fill="#34d399">ASTSnapshot</tspan><tspan fill="#e2e8f0"> {</tspan></text>
+          <text x="54" y="77"><tspan fill="#e2e8f0">    </tspan><tspan fill="#c084fc">let</tspan><tspan fill="#e2e8f0"> markdown = </tspan><tspan fill="#c084fc">try</tspan><tspan fill="#e2e8f0"> FileManager.readUTF8(at: path)</tspan></text>
+          <text x="54" y="100"><tspan fill="#e2e8f0">    </tspan><tspan fill="#c084fc">return</tspan><tspan fill="#e2e8f0"> MarkoraParser.parseLossless(markdown)</tspan><tspan fill="#38bdf8"> // ~0.4ms</tspan></text>
+        </g>
+      </g>
+
+      <!-- Split Bottom Row: Offline LaTeX Math Card + Offline Mermaid Vector Card -->
+      <g transform="translate(0, 338)">
+        <!-- Math Block Card -->
+        <rect x="0" y="0" width="298" height="126" rx="10" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" />
+        <text x="16" y="24" font-size="11" font-weight="600" fill="#64748b">∑ 离线 LaTeX 数学公式（MathML）</text>
+        <text x="149" y="80" font-family="'Times New Roman', Georgia, serif" font-size="23" font-style="italic" fill="#0f172a" text-anchor="middle">
+          ∫<tspan baseline-shift="sub" font-size="13">−∞</tspan><tspan baseline-shift="super" font-size="13">+∞</tspan> e<tspan baseline-shift="super" font-size="14">−x²</tspan> dx = √π
+        </text>
+        <text x="149" y="110" font-family="'SF Mono', Menlo, monospace" font-size="10.5" fill="#94a3b8" text-anchor="middle">点击公式即可原位编辑 LaTeX 源码</text>
+
+        <!-- Mermaid Diagram Card -->
+        <g transform="translate(316, 0)">
+          <rect x="0" y="0" width="312" height="126" rx="10" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" />
+          <text x="16" y="24" font-size="11" font-weight="600" fill="#64748b">◇ 离线 Mermaid 矢量流程图</text>
+
+          <!-- Node 1 -->
+          <rect x="18" y="50" width="76" height="34" rx="6" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.3" />
+          <text x="56" y="71" font-size="11.5" font-weight="600" fill="#1d4ed8" text-anchor="middle">Markdown</text>
+
+          <!-- Arrow 1 -->
+          <line x1="94" y1="67" x2="116" y2="67" stroke="#64748b" stroke-width="1.4" />
+          <polygon points="116,63.5 123,67 116,70.5" fill="#64748b" />
+
+          <!-- Node 2 -->
+          <rect x="124" y="50" width="68" height="34" rx="6" fill="#ecfdf5" stroke="#10b981" stroke-width="1.3" />
+          <text x="158" y="71" font-size="11.5" font-weight="600" fill="#047857" text-anchor="middle">Block AST</text>
+
+          <!-- Arrow 2 -->
+          <line x1="192" y1="67" x2="214" y2="67" stroke="#64748b" stroke-width="1.4" />
+          <polygon points="214,63.5 221,67 214,70.5" fill="#64748b" />
+
+          <!-- Node 3 -->
+          <rect x="222" y="50" width="72" height="34" rx="6" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.3" />
+          <text x="258" y="71" font-size="11.5" font-weight="600" fill="#6d28d9" text-anchor="middle">实时渲染</text>
+
+          <text x="156" y="110" font-family="'SF Mono', Menlo, monospace" font-size="10.5" fill="#94a3b8" text-anchor="middle">支持 Flowchart · Sequence · State</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- Crisp Window Outer Hairline Border -->
+  <rect x="48" y="36" width="984" height="578" rx="14" fill="none" stroke="#0f172a" stroke-opacity="0.10" stroke-width="1" />
+</svg>

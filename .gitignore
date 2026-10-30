@@ -1,0 +1,28 @@
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Build Outputs & Release Archives
+Markora.app/
+dist/
+build/
+*.dmg
+*.zip
+SHA256SUMS.txt
+assets/*.icns
+assets/*.iconset/
+
+# Node / Electron (Optional Runtime)
+node_modules/
+npm-debug.log*
+
+# Editor & Temporary Files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.env
+.env.*

@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    name: Build Universal macOS App & Run Tests
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Objective-C compiler warnings
+        run: |
+          clang -Wall -Wextra -Wno-unused-parameter -fsyntax-only -fobjc-arc macos/main.m
+
+      - name: Run JavaScriptCore automated test suite
+        run: |
+          /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc tests/test_suite.js
+
+      - name: Build Universal Markora.app
+        run: |
+          sh build_mac_app.sh
+          file Markora.app/Contents/MacOS/Markora

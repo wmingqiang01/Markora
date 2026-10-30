@@ -1,0 +1,37 @@
+{
+  "name": "markora",
+  "version": "1.0.0",
+  "description": "Minimalist Typora-inspired WYSIWYG Markdown Desktop Editor for macOS",
+  "author": "wmingqiang01",
+  "license": "MIT",
+  "homepage": "https://github.com/wmingqiang01/Markora#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wmingqiang01/Markora.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wmingqiang01/Markora/issues"
+  },
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "sh build_mac_app.sh",
+    "package:mac": "sh scripts/package_release.sh v1.0.0",
+    "test": "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc tests/test_suite.js",
+    "serve:web": "python3 -m http.server 8080 --directory src"
+  },
+  "keywords": [
+    "markdown",
+    "wysiwyg",
+    "typora",
+    "editor",
+    "macos",
+    "cocoa",
+    "webkit",
+    "latex",
+    "mermaid"
+  ],
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

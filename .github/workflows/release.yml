@@ -1,0 +1,61 @@
+name: Release macOS App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    name: Package & Publish macOS Universal Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run automated tests
+        run: |
+          /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc tests/test_suite.js
+
+      - name: Determine release version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Package Universal DMG and ZIP
+        run: |
+          chmod +x build_mac_app.sh scripts/package_release.sh
+          sh scripts/package_release.sh "${{ steps.meta.outputs.version }}"
+          ls -lh dist/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          generate_release_notes: true
+          body: |
+            ### 📥 macOS 下载与安装说明 (Apple Silicon & Intel 通用版)
+
+            1. 下载下方的 **`Markora-${{ steps.meta.outputs.version }}-macOS-Universal.dmg`**，双击打开后将 **Markora** 拖入 **Applications（应用程序）** 文件夹即可。
+            2. **首次打开提示**：由于开源版本采用本地 Ad-hoc 签名（未绑定付费 Apple Developer 证书），若首次启动时 macOS 提示「无法验证开发者 / 已损坏」，请在终端执行以下命令放行即可正常打开：
+               ```zsh
+               xattr -cr /Applications/Markora.app
+               ```
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt

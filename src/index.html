@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="github-light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Markora — 所见即所得 Markdown 编辑器</title>
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg" />
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
+<body>
+  <div id="app-layout">
+    <!-- Left Sidebar: File Tree & Document Outline (TOC) -->
+    <aside id="sidebar">
+      <div class="sidebar-top-bar">
+        <div class="sidebar-brand">
+          <img src="assets/icon.svg" alt="" class="sidebar-brand-icon" />
+          <span class="sidebar-brand-text">Markora</span>
+        </div>
+      </div>
+
+      <div class="sidebar-tabs">
+        <button type="button" class="sidebar-tab-btn active" data-tab="files">文件</button>
+        <button type="button" class="sidebar-tab-btn" data-tab="outline">大纲</button>
+        <button type="button" class="sidebar-tab-btn" data-tab="history">历史</button>
+      </div>
+
+      <!-- Panel 1: Local File Tree & Directory Switcher -->
+      <div id="panel-files" class="sidebar-panel">
+        <div class="sidebar-workspace-bar">
+          <button type="button" id="btn-dir-switcher" class="dir-switcher-btn" title="点击切换历史目录或选择新文件夹">
+            <span class="dir-switcher-icon">
+              <svg class="mk-svg-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M1.75 4.25C1.75 3.56 2.31 3 3 3H6.15C6.52 3 6.87 3.16 7.11 3.44L8.1 4.6H13C13.69 4.6 14.25 5.16 14.25 5.85V11.75C14.25 12.44 13.69 13 13 13H3C2.31 13 1.75 12.44 1.75 11.75V4.25Z" fill="currentColor" fill-opacity="0.1" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>
+            </span>
+            <span id="sidebar-folder-title" class="dir-switcher-name">工作区</span>
+            <span class="dir-switcher-caret">
+              <svg class="mk-svg-icon" width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </button>
+          <div class="workspace-actions">
+            <button type="button" id="btn-new-file" class="icon-btn-sm" title="新建 Markdown 文档 (Cmd+N)">
+              <svg class="mk-svg-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 3.25V12.75M3.25 8H12.75" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg>
+            </button>
+            <button type="button" id="btn-open-folder" class="icon-btn-sm" title="选择其他本地目录 (Cmd+Shift+O)">
+              <svg class="mk-svg-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M1.75 4.25C1.75 3.56 2.31 3 3 3H5.95C6.32 3 6.67 3.16 6.91 3.44L7.85 4.5H12.75C13.44 4.5 14 5.06 14 5.75V6.75H3.35L1.75 11.5V4.25Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/><path d="M1.85 11.8L3.25 7.25H14.45L13.1 12.05C12.95 12.6 12.45 13 11.88 13H2.95C2.22 13 1.68 12.42 1.85 11.8Z" fill="currentColor" fill-opacity="0.1" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+
+          <!-- Directory Switcher Dropdown Menu -->
+          <div id="dir-dropdown-menu" class="dir-dropdown-menu hidden">
+            <button type="button" id="menu-choose-folder" class="dir-menu-action">
+              <span class="dir-menu-action-left">
+                <svg class="mk-svg-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1.75 4.25C1.75 3.56 2.31 3 3 3H5.95C6.32 3 6.67 3.16 6.91 3.44L7.85 4.5H12.75C13.44 4.5 14 5.06 14 5.75V6.75H3.35L1.75 11.5V4.25Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/><path d="M1.85 11.8L3.25 7.25H14.45L13.1 12.05C12.95 12.6 12.45 13 11.88 13H2.95C2.22 13 1.68 12.42 1.85 11.8Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>
+                <span>选择本地目录…</span>
+              </span>
+              <kbd>⇧⌘O</kbd>
+            </button>
+            <button type="button" id="menu-choose-file" class="dir-menu-action">
+              <span class="dir-menu-action-left">
+                <svg class="mk-svg-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3.5 1.75H9.8L13.25 5.2V13.25C13.25 13.8 12.8 14.25 12.25 14.25H3.75C3.2 14.25 2.75 13.8 2.75 13.25V2.5C2.75 2.08 3.08 1.75 3.5 1.75Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/><path d="M9.5 1.85V5.25H13.15" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                <span>打开单个文档…</span>
+              </span>
+              <kbd>⌘O</kbd>
+            </button>
+            <button type="button" id="menu-reveal-finder" class="dir-menu-action">
+              <span class="dir-menu-action-left">
+                <svg class="mk-svg-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6.25 3.25H3.5C2.81 3.25 2.25 3.81 2.25 4.5V12.5C2.25 13.19 2.81 13.75 3.5 13.75H11.5C12.19 13.75 12.75 13.19 12.75 12.5V9.75" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><path d="M9.25 2.25H13.75V6.75M13.5 2.5L7.5 8.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>在访达中显示当前目录</span>
+              </span>
+            </button>
+            <div class="dir-menu-divider"></div>
+            <div class="dir-menu-section-label">最近打开的目录</div>
+            <div id="dir-dropdown-recent-list" class="dir-dropdown-recent-list"></div>
+          </div>
+        </div>
+
+        <div class="sidebar-search-box">
+          <input type="text" id="file-search-input" placeholder="搜索当前目录文件…" />
+        </div>
+
+        <div id="file-tree-list" class="sidebar-scroll-list"></div>
+
+        <div class="sidebar-footer">
+          <button type="button" id="btn-choose-dir-footer" class="sidebar-footer-btn" title="切换本地工作区文件夹 (Cmd+Shift+O)">选择目录…</button>
+          <button type="button" id="btn-open-file" class="sidebar-footer-btn" title="打开单个 .md 文件 (Cmd+O)">打开文件…</button>
+        </div>
+      </div>
+
+      <!-- Panel 2: Document Outline (TOC) -->
+      <div id="panel-outline" class="sidebar-panel hidden">
+        <div class="sidebar-workspace-bar">
+          <span class="workspace-title">目录结构 (TOC)</span>
+        </div>
+        <div id="outline-list" class="sidebar-scroll-list"></div>
+      </div>
+
+      <!-- Panel 3: Recent History (Folders & Files) -->
+      <div id="panel-history" class="sidebar-panel hidden">
+        <div class="sidebar-workspace-bar">
+          <span class="workspace-title">最近打开记录</span>
+          <div class="workspace-actions">
+            <button type="button" id="btn-clear-history" class="text-btn-xs" title="清空历史记录">清空</button>
+          </div>
+        </div>
+        <div class="sidebar-scroll-list history-scroll-container">
+          <div class="history-section">
+            <div class="history-section-header">
+              <span>历史目录</span>
+              <button type="button" id="btn-history-pick-dir" class="history-link-btn">+ 选择目录</button>
+            </div>
+            <div id="history-folders-list" class="history-list"></div>
+          </div>
+
+          <div class="history-section">
+            <div class="history-section-header">
+              <span>历史文档</span>
+              <button type="button" id="btn-history-pick-file" class="history-link-btn">+ 打开文件</button>
+            </div>
+            <div id="history-files-list" class="history-list"></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Draggable Sidebar Width Resizer -->
+    <div id="sidebar-resizer" title="拖拽调整侧边栏宽度"></div>
+
+    <!-- Main Editor Pane -->
+    <main id="main-pane">
+      <!-- Minimalist Top Titlebar -->
+      <header id="top-titlebar">
+        <div class="titlebar-left">
+          <button type="button" id="btn-toggle-sidebar" class="tb-btn" title="显示/隐藏侧边栏 (Cmd+Shift+L)">
+            <svg class="mk-svg-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="2" stroke="currentColor" stroke-width="1.3"/><line x1="6" y1="2.75" x2="6" y2="13.25" stroke="currentColor" stroke-width="1.3"/></svg>
+          </button>
+          <button type="button" id="btn-quick-open" class="tb-btn" title="快速跳转与全文搜索 (Cmd+P)">
+            <svg class="mk-svg-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="7.2" cy="7.2" r="4.6" stroke="currentColor" stroke-width="1.35"/><path d="M10.7 10.7L13.75 13.75" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" id="btn-source-mode" class="tb-btn" title="切换所见即所得 / 源码模式 (Cmd+/)">
+            <span>&lt;/&gt; 源码</span>
+          </button>
+          <button type="button" id="btn-syntax-reveal" class="tb-btn active" title="焦点段落显示/隐藏行内 Markdown 标记">
+            <span>¶ 标记</span>
+          </button>
+        </div>
+
+        <div class="titlebar-center">
+          <button type="button" id="doc-folder-name" class="doc-folder-badge" title="点击切换目录或查看最近打开记录">工作区</button>
+          <span>/</span>
+          <span id="doc-title-text" class="doc-title-name">01-欢迎使用Markora.md</span>
+          <span id="doc-dirty-dot" class="dirty-dot" title="未保存修改"></span>
+        </div>
+
+        <div class="titlebar-right">
+          <button type="button" id="btn-focus-mode" class="tb-btn" title="专注模式：淡化非当前段落 (F8)">专注</button>
+          <button type="button" id="btn-typewriter-mode" class="tb-btn" title="打字机模式：保持当前行垂直居中 (F9)">打字机</button>
+
+          <div class="theme-pills" title="切换主题：跟随系统 / GitHub Light / Paper Warm / Night Dark / Nord Minimal">
+            <button type="button" class="theme-dot theme-dot-auto" data-theme-opt="auto" title="跟随 macOS 系统外观自动切换 (Auto)"></button>
+            <button type="button" class="theme-dot active" data-theme-opt="github-light" title="GitHub Light (清爽亮色)"></button>
+            <button type="button" class="theme-dot" data-theme-opt="paper-warm" title="Paper Warm (护眼暖纸)"></button>
+            <button type="button" class="theme-dot" data-theme-opt="night-dark" title="Night Dark (深邃暗夜)"></button>
+            <button type="button" class="theme-dot" data-theme-opt="nord-minimal" title="Nord Minimal (北欧极简)"></button>
+          </div>
+
+          <button type="button" id="btn-export-html" class="tb-btn" title="导出为独立 HTML 文件">导出 HTML</button>
+          <button type="button" id="btn-export-pdf" class="tb-btn" title="导出为 PDF 文档 (Cmd+Shift+E)">导出 PDF</button>
+        </div>
+      </header>
+
+      <!-- Floating In-Document Find & Replace Bar (Cmd + F) -->
+      <div id="find-bar" class="find-bar hidden">
+        <div class="find-row">
+          <input type="text" id="find-input" placeholder="文内查找…" autocomplete="off" />
+          <span id="find-count" class="find-count">0/0</span>
+          <button type="button" id="btn-find-prev" class="find-icon-btn" title="上一个匹配 (Shift+Enter)">↑</button>
+          <button type="button" id="btn-find-next" class="find-icon-btn" title="下一个匹配 (Enter)">↓</button>
+          <button type="button" id="btn-toggle-replace" class="find-text-btn" title="展开/收起替换">替换</button>
+          <button type="button" id="btn-find-close" class="find-icon-btn" title="关闭 (Esc)">×</button>
+        </div>
+        <div id="replace-row" class="find-row hidden">
+          <input type="text" id="replace-input" placeholder="替换为…" autocomplete="off" />
+          <button type="button" id="btn-replace-one" class="find-text-btn">替换</button>
+          <button type="button" id="btn-replace-all" class="find-text-btn">全部替换</button>
+        </div>
+      </div>
+
+      <!-- Drag & Drop Visual Cue Overlay -->
+      <div id="drop-overlay" class="drop-overlay hidden">
+        <div class="drop-overlay-box">
+          <span>释放文件以插入图片（自动存入 <code>./assets/</code>）或打开 Markdown 文档</span>
+        </div>
+      </div>
+
+      <!-- Non-blocking External Edit Conflict Banner (shown only if local unsaved edits collide with external disk edits) -->
+      <div id="external-conflict-banner" class="external-conflict-banner hidden">
+        <span class="conflict-banner-msg">当前文档在外部已被修改，检测到您有尚未保存的本地编辑</span>
+        <div class="conflict-banner-actions">
+          <button type="button" id="btn-conflict-reload" class="conflict-btn primary">加载外部版本</button>
+          <button type="button" id="btn-conflict-keep" class="conflict-btn">保留我的编辑并覆盖</button>
+        </div>
+      </div>
+
+      <!-- Scrollable Editor Viewport -->
+      <div id="editor-scroll-container">
+        <!-- WYSIWYG Live Canvas -->
+        <div id="wysiwyg-canvas" class="wysiwyg-canvas"></div>
+
+        <!-- Synchronized Markdown Source Code Editor (Cmd + /) -->
+        <div id="source-editor-container" class="hidden">
+          <div id="source-linenums"><div>1</div></div>
+          <textarea id="source-textarea" spellcheck="false" placeholder="在此输入 Markdown 源码…"></textarea>
+        </div>
+      </div>
+
+      <!-- Bottom Status Bar -->
+      <footer id="status-bar">
+        <div class="status-left">
+          <span id="runtime-badge" class="status-pill">Desktop</span>
+          <span id="stat-save-state">✓ 已同步</span>
+          <span>快捷键：<code>⌘P</code> 搜索 · <code>⌘F</code> 查找 · <code>⌘/</code> 源码 · <code>/</code> 插入块</span>
+        </div>
+        <div class="status-right">
+          <span id="stat-words">0 词</span>
+          <span id="stat-chars">0 字符</span>
+          <span id="stat-lines">1 行</span>
+          <span id="stat-reading">约 1 分钟阅读</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Floating Selection Formatting Bubble Toolbar -->
+  <div id="floating-toolbar">
+    <button type="button" data-fmt="bold" title="加粗 (Cmd+B)"><strong>B</strong></button>
+    <button type="button" data-fmt="italic" title="斜体 (Cmd+I)"><em>I</em></button>
+    <button type="button" data-fmt="strike" title="删除线"><del>S</del></button>
+    <button type="button" data-fmt="highlight" title="高亮标记">高亮</button>
+    <button type="button" data-fmt="code" title="行内代码 (Cmd+E)"><code>&lt;/&gt;</code></button>
+    <button type="button" data-fmt="math" title="行内数学公式 ($...$)">∑ 公式</button>
+    <button type="button" data-fmt="link" title="插入链接 (Cmd+K)">链接</button>
+  </div>
+
+  <!-- Slash Command Quick-Insert Palette -->
+  <div id="slash-menu"></div>
+
+  <!-- Sidebar Right-Click Context Menu -->
+  <div id="context-menu" class="mk-context-menu hidden"></div>
+
+  <!-- Quick Open & Workspace Full-Text Search Palette (Cmd + P) -->
+  <div id="quick-open-modal" class="mk-palette-backdrop hidden">
+    <div class="mk-palette-card">
+      <div class="mk-palette-header">
+        <span class="mk-palette-search-icon">
+          <svg class="mk-svg-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7.2" cy="7.2" r="4.6" stroke="currentColor" stroke-width="1.4"/><path d="M10.7 10.7L13.75 13.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </span>
+        <input type="text" id="quick-open-input" placeholder="输入文件名快速跳转，或输入关键词搜索工作区全文…" autocomplete="off" />
+        <kbd class="mk-palette-kbd">ESC</kbd>
+      </div>
+      <div id="quick-open-results" class="mk-palette-results"></div>
+    </div>
+  </div>
+
+  <!-- Reusable Dialog Modal (New File / New Folder / Rename / Trash Confirm) -->
+  <div id="dialog-modal" class="mk-modal-backdrop">
+    <div class="mk-modal-card">
+      <h3 id="dialog-modal-title">新建 Markdown 文档</h3>
+      <p id="dialog-modal-desc" class="mk-modal-desc hidden"></p>
+      <input type="text" id="dialog-modal-input" placeholder="输入名称…" />
+      <div class="mk-modal-actions">
+        <button type="button" id="btn-dialog-cancel" class="tb-btn">取消</button>
+        <button type="button" id="btn-dialog-confirm" class="mk-btn-primary">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Lightbox Zoom Preview -->
+  <div id="image-lightbox" class="mk-lightbox hidden">
+    <img id="lightbox-img" src="" alt="" />
+    <div id="lightbox-caption" class="mk-lightbox-caption"></div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="mk-toast"></div>
+
+  <script src="js/icons.js"></script>
+  <script src="js/renderers.js"></script>
+  <script src="js/bridge.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
