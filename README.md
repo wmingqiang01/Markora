@@ -9,18 +9,12 @@
   </p>
 
   <p>
-    <a href="https://github.com/wmingqiang01/Markora/actions/workflows/ci.yml">
-      <img src="https://github.com/wmingqiang01/Markora/actions/workflows/ci.yml/badge.svg" alt="CI Status" />
-    </a>
-    <a href="https://github.com/wmingqiang01/Markora/releases/latest">
-      <img src="https://img.shields.io/github/v/release/wmingqiang01/Markora?color=2563eb&label=Release&logo=apple&logoColor=white" alt="Latest Release" />
-    </a>
+    <a href="https://github.com/wmingqiang01/Markora/actions/workflows/ci.yml"><img src="https://github.com/wmingqiang01/Markora/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
+    <a href="https://github.com/wmingqiang01/Markora/releases/latest"><img src="https://img.shields.io/github/v/release/wmingqiang01/Markora?include_prereleases&color=2563eb&label=Release&logo=apple&logoColor=white" alt="Latest Release" /></a>
     <img src="https://img.shields.io/badge/macOS-11.0%2B%20Universal-111827?logo=apple&logoColor=white" alt="macOS 11.0+ Universal" />
     <img src="https://img.shields.io/badge/Arch-arm64%20%7C%20x86__64-059669" alt="Universal Binary" />
     <img src="https://img.shields.io/badge/Binary-252%20KB-7c3aed" alt="252 KB Binary" />
-    <a href="LICENSE">
-      <img src="https://img.shields.io/badge/License-MIT-f59e0b" alt="MIT License" />
-    </a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-f59e0b" alt="MIT License" /></a>
   </p>
 
   <p>
@@ -36,8 +30,25 @@
 <br />
 
 <div align="center">
-  <img src="assets/preview.svg" alt="Markora macOS Interface Preview" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/preview_dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/preview.png" />
+    <img src="assets/preview.png" alt="Markora macOS 原生界面实拍" width="100%" />
+  </picture>
+  <p><sub>▲ <b>Markora 原生实机渲染界面</b>（自动适配 GitHub 浅色 / 深色外观预览）</sub></p>
 </div>
+
+<details>
+<summary><b>🖼️ 查看更多实机界面截图（深邃暗夜模式 / 大纲联动与离线公式图表）</b></summary>
+<br />
+<div align="center">
+  <img src="assets/preview_math.png" alt="Markora 大纲目录、LaTeX 公式与 Mermaid 矢量图实拍" width="100%" />
+  <p><sub>▲ 左侧大纲目录（TOC）结构导航 + 100% 离线 LaTeX 数学公式（MathML）与 Mermaid 矢量流程图渲染</sub></p>
+  <br />
+  <img src="assets/preview_dark.png" alt="Markora Night Dark 暗夜主题实拍" width="100%" />
+  <p><sub>▲ 内置 <b>Night Dark（深邃暗夜）</b> 主题实机效果</sub></p>
+</div>
+</details>
 
 <br />
 
