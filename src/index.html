@@ -202,6 +202,9 @@
 
       <!-- Scrollable Editor Viewport -->
       <div id="editor-scroll-container">
+        <!-- Cross-Block Character Selection Fallback Overlay -->
+        <div id="cross-selection-overlay" class="cross-selection-overlay" aria-hidden="true"></div>
+
         <!-- WYSIWYG Live Canvas -->
         <div id="wysiwyg-canvas" class="wysiwyg-canvas"></div>
 
@@ -281,6 +284,20 @@
 
   <!-- Toast Notification -->
   <div id="mk-toast"></div>
+
+  <!-- Cross-Block Selection Floating Action Pill & Native Clipboard/IME Bridge -->
+  <div id="block-selection-bar" class="block-selection-bar hidden">
+    <span id="block-sel-count" class="block-sel-count">已选中 1 个块</span>
+    <span class="block-sel-sep"></span>
+    <button type="button" data-bsel-act="copy" title="复制为 Markdown (Cmd+C)">复制</button>
+    <button type="button" data-bsel-act="cut" title="剪切选中块 (Cmd+X)">剪切</button>
+    <button type="button" data-bsel-act="duplicate" title="在下方克隆选中块 (Cmd+D)">克隆</button>
+    <button type="button" data-bsel-act="move-up" title="上移选中块 (Alt+↑)">↑ 上移</button>
+    <button type="button" data-bsel-act="move-down" title="下移选中块 (Alt+↓)">↓ 下移</button>
+    <button type="button" data-bsel-act="delete" class="is-danger" title="删除选中块 (Delete / Backspace)">删除</button>
+    <button type="button" data-bsel-act="clear" class="is-muted" title="取消选中 (Esc)">×</button>
+  </div>
+  <textarea id="block-selection-bridge" aria-hidden="true" tabindex="-1" spellcheck="false"></textarea>
 
   <script src="js/icons.js"></script>
   <script src="js/renderers.js"></script>

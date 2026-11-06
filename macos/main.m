@@ -416,7 +416,7 @@ static void MarkoraFSEventsCallback(
     [editMenu addItemWithTitle:@"剪切" action:@selector(cut:) keyEquivalent:@"x"];
     [editMenu addItemWithTitle:@"复制" action:@selector(copy:) keyEquivalent:@"c"];
     [editMenu addItemWithTitle:@"粘贴" action:@selector(paste:) keyEquivalent:@"v"];
-    [editMenu addItemWithTitle:@"全选" action:@selector(selectAll:) keyEquivalent:@"a"];
+    [editMenu addItemWithTitle:@"全选" action:@selector(menuSelectAll:) keyEquivalent:@"a"];
     [editMenu addItem:[NSMenuItem separatorItem]];
     [editMenu addItemWithTitle:@"查找与替换…" action:@selector(menuFind:) keyEquivalent:@"f"];
     [editMenuItem setSubmenu:editMenu];
@@ -469,6 +469,7 @@ static void MarkoraFSEventsCallback(
 - (void)menuExportPDF:(id)s { [self sendMenuCmdToJS:@"exportPDF"]; }
 - (void)menuUndo:(id)s { [self sendMenuCmdToJS:@"undo"]; }
 - (void)menuRedo:(id)s { [self sendMenuCmdToJS:@"redo"]; }
+- (void)menuSelectAll:(id)s { [self sendMenuCmdToJS:@"selectAll"]; }
 - (void)menuFind:(id)s { [self sendMenuCmdToJS:@"find"]; }
 - (void)menuToggleSource:(id)s { [self sendMenuCmdToJS:@"toggleSource"]; }
 - (void)menuToggleSidebar:(id)s { [self sendMenuCmdToJS:@"toggleSidebar"]; }

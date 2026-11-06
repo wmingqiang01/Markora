@@ -70,7 +70,12 @@
     quickOpenIndex: 0,
     collapsedFolders: new Set(),
     pendingExternalContent: null,
-    lastExternalSyncToastTs: 0
+    lastExternalSyncToastTs: 0,
+    selectedBlockIds: new Set(),
+    selectionAnchorBlockId: null,
+    selectionFocusBlockId: null,
+    crossRange: null, // Character-accurate cross-block text selection { anchor, focus }
+    slashMenuMode: 'slash'
   };
 
   let autoSaveTimer = null;
@@ -142,6 +147,7 @@
 
   function applySnapshot(snap) {
     if (!snap) return;
+    clearBlockSelection(false);
     state.markdown = snap.markdown;
     state.blocks = JSON.parse(snap.blocksJson);
     state.activeBlockId = snap.activeBlockId || state.blocks[0]?.id || null;
@@ -306,6 +312,7 @@
     ensureTrailingParagraph();
     state.activeBlockId = state.blocks[0]?.id || null;
     state.editingSpecialId = null;
+    clearBlockSelection(false);
     state.isDirty = false;
     state.pendingExternalContent = null;
     hideExternalConflictBanner();
@@ -358,6 +365,7 @@
     const clampedIdx = Math.min(prevIdx, Math.max(0, state.blocks.length - 1));
     state.activeBlockId = state.blocks[clampedIdx]?.id || null;
     state.editingSpecialId = null;
+    clearBlockSelection(false);
     state.isDirty = false;
     state.pendingExternalContent = null;
     hideExternalConflictBanner();
@@ -607,17 +615,29 @@
     if (block.id === state.activeBlockId) {
       wrapper.classList.add('is-active');
     }
+    if (state.selectedBlockIds.has(block.id)) {
+      wrapper.classList.add('is-selected');
+    }
 
-    // Left gutter block type badge (subtle indicator on hover/focus like Typora)
+    // Left gutter block type badge (click for block actions/transform, Shift+click for range select)
     const gutter = document.createElement('div');
     gutter.className = 'mk-block-gutter';
-    gutter.title = '点击转换块类型或操作';
+    gutter.title = '点击打开块操作菜单（删除 / 克隆 / 转换类型） · Shift+点击多选块';
     gutter.textContent = getBlockBadgeLabel(block);
     gutter.addEventListener('mousedown', e => {
       e.preventDefault();
       e.stopPropagation();
+      if (e.shiftKey && (state.selectionAnchorBlockId || state.activeBlockId)) {
+        setBlockRangeSelection(state.selectionAnchorBlockId || state.activeBlockId, block.id, true);
+        return;
+      }
+      if (e.metaKey || e.ctrlKey) {
+        toggleSingleBlockSelection(block.id);
+        return;
+      }
+      clearBlockSelection(false);
       setActiveBlock(block.id);
-      openSlashMenuForBlock(wrapper);
+      openSlashMenuForBlock(wrapper, 'gutter');
     });
     wrapper.appendChild(gutter);
 
@@ -673,7 +693,18 @@
           WARNING: Icons.calloutWarning,
           CAUTION: Icons.calloutCaution
         };
-        header.innerHTML = `<span class="mk-callout-icon">${icons[kind] || Icons.calloutNote}</span><span class="mk-callout-title">${kind}</span>`;
+        header.innerHTML = `<span class="mk-callout-header-left" title="点击切换提示框类型"><span class="mk-callout-icon">${icons[kind] || Icons.calloutNote}</span><span class="mk-callout-title">${kind}</span></span>`;
+
+        const delCalloutBtn = document.createElement('button');
+        delCalloutBtn.type = 'button';
+        delCalloutBtn.className = 'mk-callout-del-btn';
+        delCalloutBtn.title = '删除此提示框';
+        delCalloutBtn.textContent = '×';
+        delCalloutBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          deleteBlock(block.id);
+        });
+        header.appendChild(delCalloutBtn);
 
         // Click callout header to cycle callout type
         header.addEventListener('click', () => {
@@ -784,8 +815,12 @@
         const hrBox = document.createElement('div');
         hrBox.className = 'mk-hr-container';
         hrBox.tabIndex = 0;
+        hrBox.title = '点击选中分割线（按 Delete / Backspace 删除）';
         hrBox.innerHTML = '<hr class="mk-hr" />';
-        hrBox.addEventListener('click', () => setActiveBlock(block.id));
+        hrBox.addEventListener('click', e => {
+          if (e.shiftKey) return;
+          selectSingleBlock(block.id);
+        });
         hrBox.addEventListener('keydown', e => {
           if (e.key === 'Backspace' || e.key === 'Delete') {
             e.preventDefault();
@@ -894,7 +929,7 @@
 
     const delCodeBtn = document.createElement('button');
     delCodeBtn.type = 'button';
-    delCodeBtn.className = 'mk-code-btn';
+    delCodeBtn.className = 'mk-code-btn is-danger';
     delCodeBtn.title = '删除代码块';
     delCodeBtn.textContent = '×';
     delCodeBtn.addEventListener('click', () => {
@@ -958,6 +993,12 @@
     });
 
     textarea.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        textarea.blur();
+        selectSingleBlock(block.id);
+        return;
+      }
       if (e.key === 'Tab') {
         e.preventDefault();
         recordUndoSnapshot('code:' + block.id);
@@ -973,6 +1014,26 @@
           insertBlockBefore(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
         } else {
           insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+        }
+      } else if (e.key === 'ArrowDown' && e.shiftKey && !e.metaKey && !e.altKey) {
+        const val = textarea.value;
+        if (val.indexOf('\n', textarea.selectionEnd) === -1) {
+          const idx = state.blocks.findIndex(b => b.id === block.id);
+          if (idx >= 0 && idx < state.blocks.length - 1) {
+            e.preventDefault();
+            textarea.blur();
+            setBlockRangeSelection(block.id, state.blocks[idx + 1].id, true);
+          }
+        }
+      } else if (e.key === 'ArrowUp' && e.shiftKey && !e.metaKey && !e.altKey) {
+        const val = textarea.value;
+        if (textarea.selectionStart === 0 || val.lastIndexOf('\n', textarea.selectionStart - 1) === -1) {
+          const idx = state.blocks.findIndex(b => b.id === block.id);
+          if (idx > 0) {
+            e.preventDefault();
+            textarea.blur();
+            setBlockRangeSelection(block.id, state.blocks[idx - 1].id, true);
+          }
         }
       } else if (e.key === 'ArrowDown' && !e.shiftKey && !e.metaKey && !e.altKey) {
         if (textarea.selectionStart === textarea.selectionEnd) {
@@ -1003,7 +1064,7 @@
         }
       } else if ((e.key === 'Backspace' || e.key === 'Delete') && textarea.value === '') {
         e.preventDefault();
-        transformBlockById(block.id, 'paragraph', { text: '' });
+        deleteBlock(block.id);
       }
     });
 
@@ -1022,12 +1083,26 @@
   function createMathBlockDOM(block) {
     const container = document.createElement('div');
     container.className = 'mk-mathblock';
+    container.tabIndex = 0;
     const isEditing = state.editingSpecialId === block.id;
     if (isEditing) container.classList.add('is-editing');
 
+    const hoverActions = document.createElement('div');
+    hoverActions.className = 'mk-math-hover-actions';
+    const delMathBtn = document.createElement('button');
+    delMathBtn.type = 'button';
+    delMathBtn.className = 'mk-math-del-btn';
+    delMathBtn.title = '删除数学公式块';
+    delMathBtn.textContent = '×';
+    delMathBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteBlock(block.id);
+    });
+    hoverActions.appendChild(delMathBtn);
+
     const preview = document.createElement('div');
     preview.className = 'mk-math-preview';
-    preview.title = '点击编辑 LaTeX 数学公式源码';
+    preview.title = '点击编辑 LaTeX 公式源码 · 按 Esc 选中整个公式块后可删除';
     preview.innerHTML = Renderers.renderMath(block.latex || 'E = mc^2', true);
 
     const drawer = document.createElement('div');
@@ -1035,7 +1110,7 @@
 
     const drawerHeader = document.createElement('div');
     drawerHeader.className = 'mk-special-drawer-header';
-    drawerHeader.innerHTML = '<span>$$ LaTeX 公式源码（实时预览）</span><span class="mk-drawer-hint">按 Cmd+Enter 完成 · 点击下方插入新段落</span>';
+    drawerHeader.innerHTML = '<span>$$ LaTeX 公式源码（实时预览）</span><span class="mk-drawer-hint">Cmd+Enter 完成 · Esc 选中块 · 清空按 ⌫ 删除</span>';
 
     const input = document.createElement('textarea');
     input.className = 'mk-special-textarea';
@@ -1052,31 +1127,39 @@
     });
 
     input.addEventListener('keydown', e => {
-      if (e.key === 'Escape' || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) {
+      if (e.key === 'Escape') {
         e.preventDefault();
         state.editingSpecialId = null;
         container.classList.remove('is-editing');
-        if (e.metaKey || e.ctrlKey) {
-          insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
-        }
-      } else if (e.key === 'Backspace' && input.value === '') {
+        input.blur();
+        selectSingleBlock(block.id);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
-        transformBlockById(block.id, 'paragraph', { text: '' });
+        state.editingSpecialId = null;
+        container.classList.remove('is-editing');
+        insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+      } else if ((e.key === 'Backspace' || e.key === 'Delete') && input.value === '') {
+        e.preventDefault();
+        deleteBlock(block.id);
       }
     });
 
-    preview.addEventListener('click', () => {
+    preview.addEventListener('click', e => {
+      if (e.shiftKey) return;
       setActiveBlock(block.id);
       const nextState = !container.classList.contains('is-editing');
       state.editingSpecialId = nextState ? block.id : null;
       container.classList.toggle('is-editing', nextState);
       if (nextState) {
         setTimeout(() => input.focus(), 20);
+      } else {
+        selectSingleBlock(block.id);
       }
     });
 
     drawer.appendChild(drawerHeader);
     drawer.appendChild(input);
+    container.appendChild(hoverActions);
     container.appendChild(preview);
     container.appendChild(drawer);
     return container;
@@ -1085,6 +1168,7 @@
   function createMermaidBlockDOM(block) {
     const container = document.createElement('div');
     container.className = 'mk-mermaidblock';
+    container.tabIndex = 0;
     const isEditing = state.editingSpecialId === block.id;
     if (isEditing) container.classList.add('is-editing');
 
@@ -1095,11 +1179,13 @@
       <div class="mk-mermaid-actions">
         <button type="button" class="mk-code-btn mk-mermaid-edit-btn">编辑图表源码</button>
         <button type="button" class="mk-code-btn mk-mermaid-addp-btn">+ 段落</button>
+        <button type="button" class="mk-code-btn is-danger mk-mermaid-del-btn" title="删除此图表">×</button>
       </div>
     `;
 
     const preview = document.createElement('div');
     preview.className = 'mk-mermaid-preview';
+    preview.title = '单击选中图表块（按 Delete 删除） · 双击编辑图表源码';
     preview.innerHTML = Renderers.renderMermaidToSVG(block.code || '');
 
     const drawer = document.createElement('div');
@@ -1119,17 +1205,25 @@
     });
 
     input.addEventListener('keydown', e => {
-      if (e.key === 'Escape' || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) {
+      if (e.key === 'Escape') {
         e.preventDefault();
         state.editingSpecialId = null;
         container.classList.remove('is-editing');
-        if (e.metaKey || e.ctrlKey) {
-          insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
-        }
+        input.blur();
+        selectSingleBlock(block.id);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        state.editingSpecialId = null;
+        container.classList.remove('is-editing');
+        insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+      } else if ((e.key === 'Backspace' || e.key === 'Delete') && input.value === '') {
+        e.preventDefault();
+        deleteBlock(block.id);
       }
     });
 
     const toggleEdit = () => {
+      clearBlockSelection(false);
       setActiveBlock(block.id);
       const nextState = !container.classList.contains('is-editing');
       state.editingSpecialId = nextState ? block.id : null;
@@ -1139,7 +1233,17 @@
 
     toolbar.querySelector('.mk-mermaid-edit-btn').addEventListener('click', toggleEdit);
     toolbar.querySelector('.mk-mermaid-addp-btn').addEventListener('click', () => {
-      insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
+      insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+    });
+    toolbar.querySelector('.mk-mermaid-del-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      deleteBlock(block.id);
+    });
+    preview.addEventListener('click', e => {
+      if (e.shiftKey) return;
+      if (!container.classList.contains('is-editing')) {
+        selectSingleBlock(block.id);
+      }
     });
     preview.addEventListener('dblclick', toggleEdit);
 
@@ -1150,6 +1254,12 @@
     return container;
   }
 
+  function isTableCompletelyEmpty(block) {
+    const headersEmpty = (block.headers || []).every(h => !(h || '').trim());
+    const rowsEmpty = (block.rows || []).every(r => (r || []).every(c => !(c || '').trim()));
+    return headersEmpty && rowsEmpty;
+  }
+
   function createTableBlockDOM(block) {
     const container = document.createElement('div');
     container.className = 'mk-table-container';
@@ -1157,22 +1267,36 @@
     const bar = document.createElement('div');
     bar.className = 'mk-table-toolbar';
     bar.innerHTML = `
-      <span class="mk-table-label">⊞ 表格</span>
+      <span class="mk-table-label" title="点击选中整个表格">⊞ 表格</span>
       <div class="mk-table-btns">
         <button type="button" data-act="add-row">+ 行</button>
         <button type="button" data-act="add-col">+ 列</button>
         <button type="button" data-act="del-row">- 行</button>
         <button type="button" data-act="del-col">- 列</button>
         <button type="button" data-act="add-para">+ 下方段落</button>
+        <button type="button" data-act="del-table" class="is-danger" title="删除整个表格">× 删除表格</button>
       </div>
     `;
+
+    bar.querySelector('.mk-table-label')?.addEventListener('click', e => {
+      if (e.shiftKey) return;
+      selectSingleBlock(block.id);
+    });
 
     bar.addEventListener('click', e => {
       const btn = e.target.closest('button[data-act]');
       if (!btn) return;
       const act = btn.dataset.act;
+      if (act === 'del-table') {
+        deleteBlock(block.id);
+        return;
+      }
       if (act === 'add-para') {
-        insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
+        insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+        return;
+      }
+      if (act === 'del-row' && block.rows.length <= 1) {
+        deleteBlock(block.id);
         return;
       }
       recordUndoSnapshot();
@@ -1210,11 +1334,36 @@
         th.innerHTML = Parser.renderInlineMarkdown(block.headers[colIdx], state.revealInlineSyntax);
       });
       th.addEventListener('input', () => {
+        recordUndoSnapshot('tbl:' + block.id);
         block.headers[colIdx] = Parser.extractInlineMarkdownFromElement(th);
         markDirtyAndSync(false);
       });
       th.addEventListener('blur', () => {
         th.innerHTML = Parser.renderInlineMarkdown(block.headers[colIdx], false);
+      });
+      th.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          th.blur();
+          selectSingleBlock(block.id);
+        } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+          e.preventDefault();
+          insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+        } else if (e.key === 'ArrowUp' && !e.metaKey && !e.altKey) {
+          const idx = state.blocks.findIndex(b => b.id === block.id);
+          if (idx > 0) {
+            e.preventDefault();
+            if (e.shiftKey) {
+              th.blur();
+              setBlockRangeSelection(block.id, state.blocks[idx - 1].id, true);
+            } else {
+              focusBlockById(state.blocks[idx - 1].id, 'end');
+            }
+          }
+        } else if (e.key === 'Backspace' && colIdx === 0 && isTableCompletelyEmpty(block)) {
+          e.preventDefault();
+          deleteBlock(block.id);
+        }
       });
       trHead.appendChild(th);
     });
@@ -1244,12 +1393,27 @@
           td.innerHTML = Parser.renderInlineMarkdown(block.rows[rowIdx][colIdx] || '', false);
         });
         td.addEventListener('keydown', e => {
-          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            td.blur();
+            selectSingleBlock(block.id);
+          } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
             e.preventDefault();
             insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
-          } else if (e.key === 'ArrowDown' && !e.shiftKey && rowIdx === block.rows.length - 1) {
+          } else if (e.key === 'ArrowDown' && rowIdx === block.rows.length - 1 && !e.metaKey && !e.altKey) {
             e.preventDefault();
-            stepDownFromSpecialBlock(block.id);
+            if (e.shiftKey) {
+              const idx = state.blocks.findIndex(b => b.id === block.id);
+              if (idx >= 0 && idx < state.blocks.length - 1) {
+                td.blur();
+                setBlockRangeSelection(block.id, state.blocks[idx + 1].id, true);
+              }
+            } else {
+              stepDownFromSpecialBlock(block.id);
+            }
+          } else if (e.key === 'Backspace' && rowIdx === 0 && colIdx === 0 && isTableCompletelyEmpty(block)) {
+            e.preventDefault();
+            deleteBlock(block.id);
           }
         });
         tr.appendChild(td);
@@ -1346,10 +1510,14 @@
       markDirtyAndSync(false);
     });
     caption.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
+      if (e.key === 'Escape') {
         e.preventDefault();
-        insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
-      } else if (e.key === 'Backspace' && caption.textContent === '') {
+        caption.blur();
+        selectSingleBlock(block.id);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+      } else if ((e.key === 'Backspace' || e.key === 'Delete') && caption.textContent === '') {
         e.preventDefault();
         deleteBlock(block.id);
       } else if (e.key === 'ArrowUp') {
@@ -1361,6 +1529,12 @@
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         stepDownFromSpecialBlock(block.id);
+      }
+    });
+
+    stage.addEventListener('click', e => {
+      if (e.target === stage && !e.shiftKey) {
+        selectSingleBlock(block.id);
       }
     });
 
@@ -1481,6 +1655,183 @@
    * TEXT & LIST BLOCK INTERACTION (Typora-style Live Editing)
    * ========================================================================== */
 
+  function measureMarkdownOffsetInElement(el, targetContainer, targetOffset) {
+    let out = '';
+    let done = false;
+
+    function walk(parent) {
+      if (done) return;
+      const children = parent.childNodes;
+      for (let i = 0; i < children.length; i++) {
+        if (done) return;
+        if (parent === targetContainer && i === targetOffset) {
+          done = true;
+          return;
+        }
+        const node = children[i];
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (node === targetContainer) {
+            out += node.nodeValue.slice(0, targetOffset);
+            done = true;
+            return;
+          }
+          out += node.nodeValue;
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          const tag = node.tagName.toLowerCase();
+          if (node.classList?.contains('md-inline-math')) {
+            const hasMarker = node.previousElementSibling && node.previousElementSibling.classList?.contains('md-marker');
+            if (!hasMarker) {
+              const latex = (node.getAttribute('title') || '').replace(/^LaTeX:\s*/, '');
+              if (node === targetContainer || node.contains?.(targetContainer)) {
+                done = true;
+                return;
+              }
+              out += `$${latex}$`;
+            } else if (node === targetContainer || node.contains?.(targetContainer)) {
+              done = true;
+              return;
+            }
+          } else if (tag === 'img') {
+            const hasMarker = node.previousElementSibling && node.previousElementSibling.classList?.contains('md-marker');
+            if (!hasMarker) {
+              const alt = node.getAttribute('alt') || '';
+              const rawSrc = node.getAttribute('data-raw-src') || node.getAttribute('src') || '';
+              out += `![${alt}](${rawSrc})`;
+            }
+          } else if (tag === 'br') {
+            out += '\n';
+          } else {
+            const hasMarker = node.previousElementSibling && node.previousElementSibling.classList?.contains('md-marker');
+            let prefix = '';
+            let suffix = '';
+            if (!hasMarker && !node.classList?.contains('md-marker')) {
+              if (tag === 'strong' || tag === 'b') { prefix = '**'; suffix = '**'; }
+              else if (tag === 'em' || tag === 'i') { prefix = '*'; suffix = '*'; }
+              else if (tag === 'code') { prefix = '`'; suffix = '`'; }
+              else if (tag === 'del' || tag === 's') { prefix = '~~'; suffix = '~~'; }
+              else if (tag === 'mark') { prefix = '=='; suffix = '=='; }
+              else if (tag === 'a') { prefix = '['; suffix = `](${node.getAttribute('href') || ''})`; }
+            }
+            out += prefix;
+            walk(node);
+            if (!done) out += suffix;
+          }
+        }
+      }
+      if (!done && parent === targetContainer && targetOffset >= children.length) {
+        done = true;
+      }
+    }
+
+    walk(el);
+    return out.replace(/\u00a0/g, ' ').length;
+  }
+
+  function domPointFromMarkdownOffset(el, targetMdOffset) {
+    if (!el || targetMdOffset <= 0) {
+      return { node: el, offset: 0 };
+    }
+    let mdPos = 0;
+    let found = null;
+
+    function walk(parent) {
+      if (found) return;
+      const children = parent.childNodes || [];
+      for (let i = 0; i < children.length; i++) {
+        if (found) return;
+        const node = children[i];
+        if (node.nodeType === Node.TEXT_NODE) {
+          const val = (node.nodeValue || '').replace(/\u00a0/g, ' ');
+          if (targetMdOffset <= mdPos + val.length) {
+            found = {
+              node,
+              offset: Math.min((node.nodeValue || '').length, Math.max(0, targetMdOffset - mdPos))
+            };
+            return;
+          }
+          mdPos += val.length;
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          const tag = node.tagName.toLowerCase();
+          if (node.classList?.contains('md-inline-math')) {
+            const hasMarker = node.previousElementSibling && node.previousElementSibling.classList?.contains('md-marker');
+            if (!hasMarker) {
+              const latex = (node.getAttribute('title') || '').replace(/^LaTeX:\s*/, '');
+              const tokenLen = latex.length + 2;
+              if (targetMdOffset <= mdPos + tokenLen) {
+                found = { node: parent, offset: targetMdOffset <= mdPos ? i : i + 1 };
+                return;
+              }
+              mdPos += tokenLen;
+            }
+          } else if (tag === 'img') {
+            const hasMarker = node.previousElementSibling && node.previousElementSibling.classList?.contains('md-marker');
+            if (!hasMarker) {
+              const alt = node.getAttribute('alt') || '';
+              const rawSrc = node.getAttribute('data-raw-src') || node.getAttribute('src') || '';
+              const tokenLen = `![${alt}](${rawSrc})`.length;
+              if (targetMdOffset <= mdPos + tokenLen) {
+                found = { node: parent, offset: targetMdOffset <= mdPos ? i : i + 1 };
+                return;
+              }
+              mdPos += tokenLen;
+            }
+          } else if (tag === 'br') {
+            if (targetMdOffset <= mdPos + 1) {
+              found = { node: parent, offset: targetMdOffset <= mdPos ? i : i + 1 };
+              return;
+            }
+            mdPos += 1;
+          } else {
+            const hasMarker = node.previousElementSibling && node.previousElementSibling.classList?.contains('md-marker');
+            let prefixLen = 0;
+            let suffixLen = 0;
+            if (!hasMarker && !node.classList?.contains('md-marker')) {
+              if (tag === 'strong' || tag === 'b') { prefixLen = 2; suffixLen = 2; }
+              else if (tag === 'em' || tag === 'i') { prefixLen = 1; suffixLen = 1; }
+              else if (tag === 'code') { prefixLen = 1; suffixLen = 1; }
+              else if (tag === 'del' || tag === 's') { prefixLen = 2; suffixLen = 2; }
+              else if (tag === 'mark') { prefixLen = 2; suffixLen = 2; }
+              else if (tag === 'a') {
+                prefixLen = 1;
+                suffixLen = 3 + (node.getAttribute('href') || '').length;
+              }
+            }
+            if (targetMdOffset <= mdPos + prefixLen) {
+              found = { node: parent, offset: i };
+              return;
+            }
+            mdPos += prefixLen;
+            walk(node);
+            if (found) return;
+            if (targetMdOffset <= mdPos + suffixLen) {
+              found = { node: parent, offset: i + 1 };
+              return;
+            }
+            mdPos += suffixLen;
+          }
+        }
+      }
+    }
+
+    walk(el);
+    if (found) return found;
+    return { node: el, offset: (el.childNodes || []).length };
+  }
+
+  function createDomRangeForMarkdownSlice(el, startMdOffset, endMdOffset) {
+    if (!el || endMdOffset <= startMdOffset) return null;
+    try {
+      const pStart = domPointFromMarkdownOffset(el, startMdOffset);
+      const pEnd = domPointFromMarkdownOffset(el, endMdOffset);
+      const r = document.createRange();
+      r.setStart(pStart.node, pStart.offset);
+      r.setEnd(pEnd.node, pEnd.offset);
+      return r;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function extractMarkdownWithCaret(el) {
     const full = Parser.extractInlineMarkdownFromElement(el);
     const sel = window.getSelection();
@@ -1488,83 +1839,10 @@
       return { full, start: full.length, end: full.length };
     }
     const range = sel.getRangeAt(0);
-
-    function measureMarkdownOffset(targetContainer, targetOffset) {
-      let out = '';
-      let done = false;
-
-      function walk(parent) {
-        if (done) return;
-        const children = parent.childNodes;
-        for (let i = 0; i < children.length; i++) {
-          if (done) return;
-          if (parent === targetContainer && i === targetOffset) {
-            done = true;
-            return;
-          }
-          const node = children[i];
-          if (node.nodeType === Node.TEXT_NODE) {
-            if (node === targetContainer) {
-              out += node.nodeValue.slice(0, targetOffset);
-              done = true;
-              return;
-            }
-            out += node.nodeValue;
-          } else if (node.nodeType === Node.ELEMENT_NODE) {
-            const tag = node.tagName.toLowerCase();
-            if (node.classList.contains('md-inline-math')) {
-              const hasMarker = node.previousElementSibling && node.previousElementSibling.classList.contains('md-marker');
-              if (!hasMarker) {
-                const latex = (node.getAttribute('title') || '').replace(/^LaTeX:\s*/, '');
-                if (node === targetContainer || node.contains(targetContainer)) {
-                  done = true;
-                  return;
-                }
-                out += `$${latex}$`;
-              } else if (node === targetContainer || node.contains(targetContainer)) {
-                done = true;
-                return;
-              }
-            } else if (tag === 'img') {
-              const hasMarker = node.previousElementSibling && node.previousElementSibling.classList.contains('md-marker');
-              if (!hasMarker) {
-                const alt = node.getAttribute('alt') || '';
-                const rawSrc = node.getAttribute('data-raw-src') || node.getAttribute('src') || '';
-                out += `![${alt}](${rawSrc})`;
-              }
-            } else if (tag === 'br') {
-              out += '\n';
-            } else {
-              const hasMarker = node.previousElementSibling && node.previousElementSibling.classList.contains('md-marker');
-              let prefix = '';
-              let suffix = '';
-              if (!hasMarker && !node.classList.contains('md-marker')) {
-                if (tag === 'strong' || tag === 'b') { prefix = '**'; suffix = '**'; }
-                else if (tag === 'em' || tag === 'i') { prefix = '*'; suffix = '*'; }
-                else if (tag === 'code') { prefix = '`'; suffix = '`'; }
-                else if (tag === 'del' || tag === 's') { prefix = '~~'; suffix = '~~'; }
-                else if (tag === 'mark') { prefix = '=='; suffix = '=='; }
-                else if (tag === 'a') { prefix = '['; suffix = `](${node.getAttribute('href') || ''})`; }
-              }
-              out += prefix;
-              walk(node);
-              if (!done) out += suffix;
-            }
-          }
-        }
-        if (!done && parent === targetContainer && targetOffset >= children.length) {
-          done = true;
-        }
-      }
-
-      walk(el);
-      return out.replace(/\u00a0/g, ' ').length;
-    }
-
-    const start = Math.min(full.length, measureMarkdownOffset(range.startContainer, range.startOffset));
+    const start = Math.min(full.length, measureMarkdownOffsetInElement(el, range.startContainer, range.startOffset));
     const end = range.collapsed
       ? start
-      : Math.min(full.length, measureMarkdownOffset(range.endContainer, range.endOffset));
+      : Math.min(full.length, measureMarkdownOffsetInElement(el, range.endContainer, range.endOffset));
     return { full, start, end };
   }
 
@@ -1578,7 +1856,17 @@
       } else if (programmatic === 'end') {
         placeCaretAtEnd(el);
       } else if (typeof programmatic === 'number') {
-        setCaretCharacterOffsetWithin(el, programmatic);
+        try {
+          const pt = domPointFromMarkdownOffset(el, programmatic);
+          const range = document.createRange();
+          range.setStart(pt.node, pt.offset);
+          range.collapse(true);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } catch (e) {
+          setCaretCharacterOffsetWithin(el, programmatic);
+        }
       }
       return;
     }
@@ -1678,6 +1966,26 @@
         if (handleSlashMenuKeydown(e)) return;
       }
 
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        el.blur();
+        selectSingleBlock(block.id);
+        return;
+      }
+
+      // Shift + Arrow across block boundaries -> Character-accurate Cross-Block Text Selection
+      if (
+        e.shiftKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+      ) {
+        if (tryStartCrossRangeFromEditableKey(el, block, null, e.key)) {
+          e.preventDefault();
+          return;
+        }
+      }
+
       // Smooth Cross-Block ArrowUp / ArrowDown Navigation
       if (e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.altKey) {
         if (isCaretNearTopOfEditable(el)) {
@@ -1724,7 +2032,7 @@
         }
         if (trimmed === '---' || trimmed === '***') {
           transformBlockById(block.id, 'hr', {});
-          insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
+          insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
           return;
         }
         const imgSyntax = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
@@ -1759,9 +2067,26 @@
           }
 
           const idx = state.blocks.findIndex(b => b.id === block.id);
+          // Leading empty first paragraph when document has more blocks below
+          if (idx === 0 && full === '' && state.blocks.length > 1) {
+            e.preventDefault();
+            recordUndoSnapshot();
+            state.blocks.splice(0, 1);
+            state.activeBlockId = state.blocks[0].id;
+            markDirtyAndSync(true);
+            renderCanvas();
+            focusBlockById(state.blocks[0].id, 'start');
+            return;
+          }
+
           if (idx > 0) {
             const prevBlock = state.blocks[idx - 1];
-            if (prevBlock.type === 'paragraph' || prevBlock.type === 'heading' || prevBlock.type === 'blockquote') {
+            if (
+              prevBlock.type === 'paragraph' ||
+              prevBlock.type === 'heading' ||
+              prevBlock.type === 'blockquote' ||
+              prevBlock.type === 'callout'
+            ) {
               e.preventDefault();
               recordUndoSnapshot();
               const joinOffset = (prevBlock.text || '').length;
@@ -1784,9 +2109,102 @@
               renderCanvas();
               focusListItem(prevBlock.id, lastIdx, joinOffset);
               return;
-            } else if (full === '') {
+            } else if (prevBlock.type === 'tasklist') {
               e.preventDefault();
-              deleteBlock(block.id);
+              recordUndoSnapshot();
+              const lastIdx = Math.max(0, (prevBlock.items?.length || 1) - 1);
+              const joinOffset = (prevBlock.items[lastIdx]?.text || '').length;
+              prevBlock.items[lastIdx].text = (prevBlock.items[lastIdx]?.text || '') + full;
+              state.blocks.splice(idx, 1);
+              state.activeBlockId = prevBlock.id;
+              markDirtyAndSync(false);
+              renderCanvas();
+              focusListItem(prevBlock.id, lastIdx, joinOffset);
+              return;
+            } else {
+              // Previous block is a special block (hr, table, mermaid, math, code, image):
+              // Select it so pressing Backspace once more cleanly deletes that special block!
+              e.preventDefault();
+              el.blur();
+              if (full === '' && idx < state.blocks.length - 1) {
+                recordUndoSnapshot();
+                state.blocks.splice(idx, 1);
+                markDirtyAndSync(false);
+                renderCanvas();
+              }
+              selectSingleBlock(prevBlock.id);
+              return;
+            }
+          }
+        }
+      } else if (e.key === 'Delete') {
+        const { full, start, end } = extractMarkdownWithCaret(el);
+        const isCollapsedAtEnd = start === full.length && end === full.length;
+        if (isCollapsedAtEnd) {
+          const idx = state.blocks.findIndex(b => b.id === block.id);
+          if (idx >= 0 && idx < state.blocks.length - 1) {
+            if (full === '' && block.type === 'paragraph') {
+              e.preventDefault();
+              recordUndoSnapshot();
+              const nextId = state.blocks[idx + 1].id;
+              state.blocks.splice(idx, 1);
+              state.activeBlockId = nextId;
+              markDirtyAndSync(true);
+              renderCanvas();
+              focusBlockById(nextId, 'start');
+              return;
+            }
+            const nextBlock = state.blocks[idx + 1];
+            if (
+              nextBlock.type === 'paragraph' ||
+              nextBlock.type === 'heading' ||
+              nextBlock.type === 'blockquote' ||
+              nextBlock.type === 'callout'
+            ) {
+              e.preventDefault();
+              recordUndoSnapshot();
+              const joinOffset = full.length;
+              block.text = full + (nextBlock.text || '');
+              state.blocks.splice(idx + 1, 1);
+              ensureTrailingParagraph();
+              markDirtyAndSync(true);
+              renderCanvas();
+              focusBlockById(block.id, joinOffset);
+              return;
+            } else if (nextBlock.type === 'ulist' || nextBlock.type === 'olist') {
+              e.preventDefault();
+              recordUndoSnapshot();
+              const joinOffset = full.length;
+              const firstItem = nextBlock.items?.[0] || '';
+              block.text = full + firstItem;
+              if ((nextBlock.items?.length || 0) <= 1) {
+                state.blocks.splice(idx + 1, 1);
+              } else {
+                nextBlock.items.shift();
+              }
+              markDirtyAndSync(false);
+              renderCanvas();
+              focusBlockById(block.id, joinOffset);
+              return;
+            } else if (nextBlock.type === 'tasklist') {
+              e.preventDefault();
+              recordUndoSnapshot();
+              const joinOffset = full.length;
+              const firstTask = nextBlock.items?.[0]?.text || '';
+              block.text = full + firstTask;
+              if ((nextBlock.items?.length || 0) <= 1) {
+                state.blocks.splice(idx + 1, 1);
+              } else {
+                nextBlock.items.shift();
+              }
+              markDirtyAndSync(false);
+              renderCanvas();
+              focusBlockById(block.id, joinOffset);
+              return;
+            } else {
+              e.preventDefault();
+              el.blur();
+              selectSingleBlock(nextBlock.id);
               return;
             }
           }
@@ -1872,6 +2290,23 @@
     });
 
     el.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        el.blur();
+        selectSingleBlock(block.id);
+        return;
+      }
+      if (
+        e.shiftKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+      ) {
+        if (tryStartCrossRangeFromEditableKey(el, block, itemIdx, e.key)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.key === 'ArrowUp' && !e.shiftKey && isCaretNearTopOfEditable(el)) {
         e.preventDefault();
         if (itemIdx > 0) {
@@ -1903,7 +2338,7 @@
           } else {
             block.items.splice(itemIdx, 1);
             replaceBlockDOM(block);
-            insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
+            insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start', true);
           }
           return;
         }
@@ -1917,8 +2352,8 @@
         const { full, start, end } = extractMarkdownWithCaret(el);
         if (start === 0 && end === 0) {
           e.preventDefault();
-          recordUndoSnapshot();
           if (itemIdx > 0) {
+            recordUndoSnapshot();
             const joinOffset = (block.items[itemIdx - 1] || '').length;
             block.items[itemIdx - 1] = (block.items[itemIdx - 1] || '') + full;
             block.items.splice(itemIdx, 1);
@@ -1928,11 +2363,45 @@
           } else if (block.items.length === 1) {
             transformBlockById(block.id, 'paragraph', { text: full });
             focusBlockById(block.id, 'start');
-          } else if (full === '') {
+          } else {
+            // Split item 0 out into a normal paragraph right above the remaining list!
+            recordUndoSnapshot();
             block.items.splice(0, 1);
+            const newPara = { id: Parser.nextBlockId(), type: 'paragraph', text: full };
+            insertBlockBefore(block.id, newPara, 'start', true);
+          }
+        }
+      } else if (e.key === 'Delete') {
+        const { full, start, end } = extractMarkdownWithCaret(el);
+        if (start === full.length && end === full.length) {
+          if (itemIdx < block.items.length - 1) {
+            e.preventDefault();
+            recordUndoSnapshot();
+            const joinOffset = full.length;
+            block.items[itemIdx] = full + (block.items[itemIdx + 1] || '');
+            block.items.splice(itemIdx + 1, 1);
             markDirtyAndSync(false);
             replaceBlockDOM(block);
-            focusListItem(block.id, 0, 'start');
+            focusListItem(block.id, itemIdx, joinOffset);
+          } else {
+            const idx = state.blocks.findIndex(b => b.id === block.id);
+            if (idx >= 0 && idx < state.blocks.length - 1) {
+              const nextBlk = state.blocks[idx + 1];
+              e.preventDefault();
+              if (nextBlk.type === 'paragraph' || nextBlk.type === 'heading' || nextBlk.type === 'blockquote') {
+                recordUndoSnapshot();
+                const joinOffset = full.length;
+                block.items[itemIdx] = full + (nextBlk.text || '');
+                state.blocks.splice(idx + 1, 1);
+                ensureTrailingParagraph();
+                markDirtyAndSync(true);
+                renderCanvas();
+                focusListItem(block.id, itemIdx, joinOffset);
+              } else {
+                el.blur();
+                selectSingleBlock(nextBlk.id);
+              }
+            }
           }
         }
       }
@@ -1964,6 +2433,23 @@
     });
 
     el.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        el.blur();
+        selectSingleBlock(block.id);
+        return;
+      }
+      if (
+        e.shiftKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+      ) {
+        if (tryStartCrossRangeFromEditableKey(el, block, itemIdx, e.key)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.key === 'ArrowUp' && !e.shiftKey && isCaretNearTopOfEditable(el)) {
         e.preventDefault();
         if (itemIdx > 0) {
@@ -1995,7 +2481,7 @@
           } else {
             block.items.splice(itemIdx, 1);
             replaceBlockDOM(block);
-            insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' });
+            insertBlockAfter(block.id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start', true);
           }
           return;
         }
@@ -2009,8 +2495,8 @@
         const { full, start, end } = extractMarkdownWithCaret(el);
         if (start === 0 && end === 0) {
           e.preventDefault();
-          recordUndoSnapshot();
           if (itemIdx > 0) {
+            recordUndoSnapshot();
             const joinOffset = (block.items[itemIdx - 1].text || '').length;
             block.items[itemIdx - 1].text = (block.items[itemIdx - 1].text || '') + full;
             block.items.splice(itemIdx, 1);
@@ -2020,11 +2506,44 @@
           } else if (block.items.length === 1) {
             transformBlockById(block.id, 'paragraph', { text: full });
             focusBlockById(block.id, 'start');
-          } else if (full === '') {
+          } else {
+            recordUndoSnapshot();
             block.items.splice(0, 1);
+            const newPara = { id: Parser.nextBlockId(), type: 'paragraph', text: full };
+            insertBlockBefore(block.id, newPara, 'start', true);
+          }
+        }
+      } else if (e.key === 'Delete') {
+        const { full, start, end } = extractMarkdownWithCaret(el);
+        if (start === full.length && end === full.length) {
+          if (itemIdx < block.items.length - 1) {
+            e.preventDefault();
+            recordUndoSnapshot();
+            const joinOffset = full.length;
+            block.items[itemIdx].text = full + (block.items[itemIdx + 1]?.text || '');
+            block.items.splice(itemIdx + 1, 1);
             markDirtyAndSync(false);
             replaceBlockDOM(block);
-            focusListItem(block.id, 0, 'start');
+            focusListItem(block.id, itemIdx, joinOffset);
+          } else {
+            const idx = state.blocks.findIndex(b => b.id === block.id);
+            if (idx >= 0 && idx < state.blocks.length - 1) {
+              const nextBlk = state.blocks[idx + 1];
+              e.preventDefault();
+              if (nextBlk.type === 'paragraph' || nextBlk.type === 'heading' || nextBlk.type === 'blockquote') {
+                recordUndoSnapshot();
+                const joinOffset = full.length;
+                block.items[itemIdx].text = full + (nextBlk.text || '');
+                state.blocks.splice(idx + 1, 1);
+                ensureTrailingParagraph();
+                markDirtyAndSync(true);
+                renderCanvas();
+                focusListItem(block.id, itemIdx, joinOffset);
+              } else {
+                el.blur();
+                selectSingleBlock(nextBlk.id);
+              }
+            }
           }
         }
       }
@@ -2162,8 +2681,10 @@
 
   function deleteBlock(blockId) {
     recordUndoSnapshot();
+    clearBlockSelection(false);
     if (state.blocks.length <= 1) {
       state.blocks[0] = { id: Parser.nextBlockId(), type: 'paragraph', text: '' };
+      state.activeBlockId = state.blocks[0].id;
       markDirtyAndSync(true);
       renderCanvas();
       focusBlockById(state.blocks[0].id, 'start');
@@ -2172,11 +2693,1712 @@
     const idx = state.blocks.findIndex(b => b.id === blockId);
     if (idx === -1) return;
     state.blocks.splice(idx, 1);
-    const prevBlock = state.blocks[Math.max(0, idx - 1)];
-    state.activeBlockId = prevBlock.id;
+    ensureTrailingParagraph();
+    const nextIdx = Math.min(Math.max(0, idx - 1), state.blocks.length - 1);
+    const targetBlock = state.blocks[nextIdx];
+    state.activeBlockId = targetBlock.id;
     markDirtyAndSync(true);
     renderCanvas();
-    focusBlockById(prevBlock.id, 'end');
+    focusBlockById(targetBlock.id, idx === 0 ? 'start' : 'end');
+  }
+
+  /* ==========================================================================
+   * CROSS-BLOCK SELECTION & MULTI-BLOCK OPERATIONS ENGINE
+   * ========================================================================== */
+
+  function hasBlockSelection() {
+    return state.selectedBlockIds && state.selectedBlockIds.size > 0;
+  }
+
+  function getSelectedBlockIndices() {
+    if (!hasBlockSelection()) return [];
+    const indices = [];
+    state.blocks.forEach((blk, idx) => {
+      if (state.selectedBlockIds.has(blk.id)) {
+        indices.push(idx);
+      }
+    });
+    return indices;
+  }
+
+  function getSelectedBlocksOrdered() {
+    return getSelectedBlockIndices().map(idx => state.blocks[idx]);
+  }
+
+  function getSelectedBlocksMarkdown() {
+    const blocks = getSelectedBlocksOrdered();
+    if (blocks.length === 0) return '';
+    return Parser.serializeBlocksToMarkdown(blocks);
+  }
+
+  function syncBlockSelectionUI(focusBridge = true) {
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (canvas) {
+      canvas.querySelectorAll(':scope > .mk-block').forEach(el => {
+        el.classList.toggle('is-selected', state.selectedBlockIds.has(el.dataset.blockId));
+      });
+    }
+
+    const bar = document.getElementById('block-selection-bar');
+    const countEl = document.getElementById('block-sel-count');
+    const bridge = document.getElementById('block-selection-bridge');
+
+    if (!hasBlockSelection() || state.sourceMode) {
+      bar?.classList.add('hidden');
+      return;
+    }
+
+    hideFloatingToolbar();
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch (e) {}
+
+    if (countEl) {
+      const n = state.selectedBlockIds.size;
+      countEl.textContent = n === state.blocks.length && n > 1
+        ? `已全选 ${n} 个块`
+        : `已选中 ${n} 个块`;
+    }
+    bar?.classList.remove('hidden');
+
+    if (focusBridge && bridge) {
+      const serialized = getSelectedBlocksMarkdown();
+      bridge.value = serialized || '\n';
+      try {
+        bridge.focus({ preventScroll: true });
+      } catch (e) {
+        bridge.focus();
+      }
+      bridge.setSelectionRange(0, bridge.value.length);
+    }
+  }
+
+  /* ==========================================================================
+   * CHARACTER-ACCURATE CROSS-BLOCK TEXT SELECTION ENGINE
+   * ========================================================================== */
+
+  function hasCrossRange() {
+    return Boolean(state.crossRange && state.crossRange.anchor && state.crossRange.focus);
+  }
+
+  function getListItemText(block, idx) {
+    if (!block || !Array.isArray(block.items) || idx < 0 || idx >= block.items.length) return '';
+    return block.type === 'tasklist' ? (block.items[idx]?.text || '') : (block.items[idx] || '');
+  }
+
+  function setListItemText(block, idx, val) {
+    if (!block || !Array.isArray(block.items) || idx < 0 || idx >= block.items.length) return;
+    if (block.type === 'tasklist') {
+      block.items[idx].text = val;
+    } else {
+      block.items[idx] = val;
+    }
+  }
+
+  function getTableCellText(block, rowIdx, colIdx) {
+    if (!block || block.type !== 'table') return '';
+    if (rowIdx === -1) return block.headers?.[colIdx] || '';
+    return block.rows?.[rowIdx]?.[colIdx] || '';
+  }
+
+  function setTableCellText(block, rowIdx, colIdx, val) {
+    if (!block || block.type !== 'table') return;
+    if (rowIdx === -1) {
+      if (block.headers && colIdx < block.headers.length) block.headers[colIdx] = val;
+    } else if (block.rows?.[rowIdx] && colIdx < block.rows[rowIdx].length) {
+      block.rows[rowIdx][colIdx] = val;
+    }
+  }
+
+  function makeBlockBoundaryEndpoint(blockIdx, atEnd = false) {
+    const block = state.blocks[blockIdx];
+    if (!block) return null;
+    const t = block.type;
+    if (t === 'paragraph' || t === 'heading' || t === 'blockquote' || t === 'callout') {
+      const len = (block.text || '').length;
+      return { blockId: block.id, blockIdx, kind: 'editable', mdOffset: atEnd ? len : 0 };
+    }
+    if (t === 'ulist' || t === 'olist' || t === 'tasklist') {
+      const count = Math.max(1, (block.items || []).length);
+      const itemIdx = atEnd ? count - 1 : 0;
+      const len = getListItemText(block, itemIdx).length;
+      return {
+        blockId: block.id,
+        blockIdx,
+        kind: t === 'tasklist' ? 'taskitem' : 'listitem',
+        itemIdx,
+        mdOffset: atEnd ? len : 0
+      };
+    }
+    if (t === 'code') {
+      const len = (block.code || '').length;
+      return { blockId: block.id, blockIdx, kind: 'code', codeOffset: atEnd ? len : 0 };
+    }
+    if (t === 'table') {
+      const cols = Math.max(1, (block.headers || []).length);
+      const rows = (block.rows || []).length;
+      const rowIdx = atEnd ? rows - 1 : -1;
+      const colIdx = atEnd ? cols - 1 : 0;
+      const len = getTableCellText(block, rowIdx, colIdx).length;
+      return { blockId: block.id, blockIdx, kind: 'table', rowIdx, colIdx, mdOffset: atEnd ? len : 0 };
+    }
+    return { blockId: block.id, blockIdx, kind: 'special', edge: atEnd ? 'after' : 'before' };
+  }
+
+  function refreshEndpointIndex(ep) {
+    if (!ep) return null;
+    const idx = state.blocks.findIndex(b => b.id === ep.blockId);
+    if (idx === -1) return null;
+    return { ...ep, blockIdx: idx };
+  }
+
+  function compareEndpoints(a, b) {
+    if (!a || !b) return 0;
+    if (a.blockIdx !== b.blockIdx) return a.blockIdx - b.blockIdx;
+    if ((a.kind === 'listitem' || a.kind === 'taskitem') && (b.kind === 'listitem' || b.kind === 'taskitem')) {
+      if (a.itemIdx !== b.itemIdx) return a.itemIdx - b.itemIdx;
+      return (a.mdOffset || 0) - (b.mdOffset || 0);
+    }
+    if (a.kind === 'table' && b.kind === 'table') {
+      if (a.rowIdx !== b.rowIdx) return a.rowIdx - b.rowIdx;
+      if (a.colIdx !== b.colIdx) return a.colIdx - b.colIdx;
+      return (a.mdOffset || 0) - (b.mdOffset || 0);
+    }
+    if (a.kind === 'code' && b.kind === 'code') {
+      return (a.codeOffset || 0) - (b.codeOffset || 0);
+    }
+    if (a.kind === 'special' && b.kind === 'special') {
+      if (a.edge === b.edge) return 0;
+      return a.edge === 'before' ? -1 : 1;
+    }
+    return (a.mdOffset || 0) - (b.mdOffset || 0);
+  }
+
+  function isSameSubEditable(a, b) {
+    if (!a || !b || a.blockId !== b.blockId || a.kind !== b.kind) return false;
+    if (a.kind === 'special') return false;
+    if (a.kind === 'listitem' || a.kind === 'taskitem') return a.itemIdx === b.itemIdx;
+    if (a.kind === 'table') return a.rowIdx === b.rowIdx && a.colIdx === b.colIdx;
+    return true;
+  }
+
+  function normalizeCrossRange(cr = state.crossRange) {
+    if (!cr || !cr.anchor || !cr.focus) return null;
+    const anchor = refreshEndpointIndex(cr.anchor);
+    const focus = refreshEndpointIndex(cr.focus);
+    if (!anchor || !focus) return null;
+    const cmp = compareEndpoints(anchor, focus);
+    return cmp <= 0
+      ? { start: anchor, end: focus, reversed: false, collapsed: cmp === 0 }
+      : { start: focus, end: anchor, reversed: true, collapsed: false };
+  }
+
+  function isEndpointAtBlockStart(ep) {
+    if (!ep) return false;
+    if (ep.kind === 'editable') return (ep.mdOffset || 0) <= 0;
+    if (ep.kind === 'listitem' || ep.kind === 'taskitem') return ep.itemIdx === 0 && (ep.mdOffset || 0) <= 0;
+    if (ep.kind === 'code') return (ep.codeOffset || 0) <= 0;
+    if (ep.kind === 'table') return ep.rowIdx === -1 && ep.colIdx === 0 && (ep.mdOffset || 0) <= 0;
+    if (ep.kind === 'special') return ep.edge === 'before';
+    return false;
+  }
+
+  function isEndpointAtBlockEnd(ep) {
+    const block = state.blocks[ep?.blockIdx];
+    if (!block) return false;
+    if (ep.kind === 'editable') return (ep.mdOffset || 0) >= (block.text || '').length;
+    if (ep.kind === 'listitem' || ep.kind === 'taskitem') {
+      const last = Math.max(0, (block.items || []).length - 1);
+      return ep.itemIdx >= last && (ep.mdOffset || 0) >= getListItemText(block, last).length;
+    }
+    if (ep.kind === 'code') return (ep.codeOffset || 0) >= (block.code || '').length;
+    if (ep.kind === 'table') {
+      const lastRow = (block.rows || []).length - 1;
+      const lastCol = Math.max(0, (block.headers || []).length - 1);
+      return ep.rowIdx >= lastRow && ep.colIdx >= lastCol && (ep.mdOffset || 0) >= getTableCellText(block, lastRow, lastCol).length;
+    }
+    if (ep.kind === 'special') return ep.edge === 'after';
+    return false;
+  }
+
+  function measureMdOffsetFromPointInEditable(el, clientX, clientY, fallbackFullLen) {
+    if (!el || !document.caretRangeFromPoint) return 0;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return 0;
+    if (clientY < r.top - 4) return 0;
+    if (clientY > r.bottom + 4) return fallbackFullLen;
+    const px = Math.min(Math.max(clientX, r.left + 2), Math.max(r.left + 2, r.right - 2));
+    const py = Math.min(Math.max(clientY, r.top + 2), Math.max(r.top + 2, r.bottom - 2));
+    try {
+      const hit = document.caretRangeFromPoint(px, py);
+      if (hit && el.contains(hit.startContainer)) {
+        return Math.min(fallbackFullLen, measureMarkdownOffsetInElement(el, hit.startContainer, hit.startOffset));
+      }
+    } catch (e) {}
+    return clientX <= r.left ? 0 : fallbackFullLen;
+  }
+
+  function resolveEndpointFromPoint(clientX, clientY) {
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (!canvas || state.blocks.length === 0) return null;
+    const blockEls = Array.from(canvas.querySelectorAll(':scope > .mk-block'));
+    if (blockEls.length === 0) return null;
+
+    const firstRect = blockEls[0].getBoundingClientRect();
+    if (clientY < firstRect.top) {
+      return makeBlockBoundaryEndpoint(0, false);
+    }
+    const lastIdx = Math.min(blockEls.length, state.blocks.length) - 1;
+    const lastRect = blockEls[lastIdx].getBoundingClientRect();
+    if (clientY > lastRect.bottom) {
+      return makeBlockBoundaryEndpoint(lastIdx, true);
+    }
+
+    let hitIdx = 0;
+    for (let i = 0; i <= lastIdx; i++) {
+      const r = blockEls[i].getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) {
+        hitIdx = i;
+        break;
+      }
+      if (i < lastIdx) {
+        const rNext = blockEls[i + 1].getBoundingClientRect();
+        if (clientY > r.bottom && clientY < rNext.top) {
+          return makeBlockBoundaryEndpoint(i, true);
+        }
+      }
+    }
+
+    const wrapper = blockEls[hitIdx];
+    const block = state.blocks[hitIdx];
+    if (!wrapper || !block) return null;
+    const t = block.type;
+
+    if (t === 'paragraph' || t === 'heading' || t === 'blockquote' || t === 'callout') {
+      const el = wrapper.querySelector('.mk-editable');
+      const fullLen = (block.text || '').length;
+      const mdOffset = el ? measureMdOffsetFromPointInEditable(el, clientX, clientY, fullLen) : 0;
+      return { blockId: block.id, blockIdx: hitIdx, kind: 'editable', mdOffset };
+    }
+
+    if (t === 'ulist' || t === 'olist' || t === 'tasklist') {
+      const itemEls = Array.from(wrapper.querySelectorAll('.mk-editable'));
+      if (itemEls.length === 0) return makeBlockBoundaryEndpoint(hitIdx, false);
+      let chosen = 0;
+      for (let k = 0; k < itemEls.length; k++) {
+        const ir = itemEls[k].closest('li')?.getBoundingClientRect() || itemEls[k].getBoundingClientRect();
+        if (clientY <= ir.bottom || k === itemEls.length - 1) {
+          chosen = k;
+          break;
+        }
+      }
+      const fullLen = getListItemText(block, chosen).length;
+      const mdOffset = measureMdOffsetFromPointInEditable(itemEls[chosen], clientX, clientY, fullLen);
+      return {
+        blockId: block.id,
+        blockIdx: hitIdx,
+        kind: t === 'tasklist' ? 'taskitem' : 'listitem',
+        itemIdx: chosen,
+        mdOffset
+      };
+    }
+
+    if (t === 'table') {
+      const theadCells = Array.from(wrapper.querySelectorAll('thead th'));
+      const bodyRows = Array.from(wrapper.querySelectorAll('tbody tr'));
+      const allRowEls = [
+        { rowIdx: -1, cells: theadCells },
+        ...bodyRows.map((tr, idx) => ({ rowIdx: idx, cells: Array.from(tr.querySelectorAll('td')) }))
+      ].filter(r => r.cells.length > 0);
+      if (allRowEls.length === 0) return makeBlockBoundaryEndpoint(hitIdx, false);
+
+      let chosenRow = allRowEls[0];
+      for (const rowObj of allRowEls) {
+        const rr = rowObj.cells[0].parentElement?.getBoundingClientRect() || rowObj.cells[0].getBoundingClientRect();
+        if (clientY <= rr.bottom) {
+          chosenRow = rowObj;
+          break;
+        }
+        chosenRow = rowObj;
+      }
+      let chosenColIdx = 0;
+      for (let c = 0; c < chosenRow.cells.length; c++) {
+        const cr = chosenRow.cells[c].getBoundingClientRect();
+        if (clientX <= cr.right || c === chosenRow.cells.length - 1) {
+          chosenColIdx = c;
+          break;
+        }
+      }
+      const cellEl = chosenRow.cells[chosenColIdx];
+      const fullLen = getTableCellText(block, chosenRow.rowIdx, chosenColIdx).length;
+      const mdOffset = measureMdOffsetFromPointInEditable(cellEl, clientX, clientY, fullLen);
+      return { blockId: block.id, blockIdx: hitIdx, kind: 'table', rowIdx: chosenRow.rowIdx, colIdx: chosenColIdx, mdOffset };
+    }
+
+    if (t === 'code') {
+      const ta = wrapper.querySelector('.mk-code-textarea');
+      const code = block.code || '';
+      if (!ta) return { blockId: block.id, blockIdx: hitIdx, kind: 'code', codeOffset: 0 };
+      const tr = ta.getBoundingClientRect();
+      if (clientY <= tr.top + 4) return { blockId: block.id, blockIdx: hitIdx, kind: 'code', codeOffset: 0 };
+      if (clientY >= tr.bottom - 4) return { blockId: block.id, blockIdx: hitIdx, kind: 'code', codeOffset: code.length };
+      const lines = code.split('\n');
+      const lineH = 22.5;
+      const padTop = 12;
+      const padLeft = 14;
+      const approxCharW = 8.1;
+      const lineIdx = Math.min(lines.length - 1, Math.max(0, Math.floor((clientY - tr.top - padTop + (ta.scrollTop || 0)) / lineH)));
+      const colIdx = Math.min(lines[lineIdx].length, Math.max(0, Math.round((clientX - tr.left - padLeft) / approxCharW)));
+      let offset = 0;
+      for (let l = 0; l < lineIdx; l++) offset += lines[l].length + 1;
+      offset += colIdx;
+      return { blockId: block.id, blockIdx: hitIdx, kind: 'code', codeOffset: Math.min(code.length, offset) };
+    }
+
+    const wr = wrapper.getBoundingClientRect();
+    const edge = clientY < wr.top + wr.height * 0.42 ? 'before' : 'after';
+    return { blockId: block.id, blockIdx: hitIdx, kind: 'special', edge };
+  }
+
+  function getCurrentCaretEndpoint(useAnchor = true) {
+    const activeEl = document.activeElement;
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (!activeEl || !canvas || !canvas.contains(activeEl)) {
+      const fallbackIdx = Math.max(0, state.blocks.findIndex(b => b.id === state.activeBlockId));
+      return state.blocks[fallbackIdx] ? makeBlockBoundaryEndpoint(fallbackIdx, false) : null;
+    }
+
+    const wrapper = activeEl.closest('.mk-block');
+    const blockIdx = state.blocks.findIndex(b => b.id === wrapper?.dataset.blockId);
+    if (blockIdx === -1) return null;
+    const block = state.blocks[blockIdx];
+
+    if (activeEl.classList.contains('mk-code-textarea') && block.type === 'code') {
+      const off = useAnchor ? (activeEl.selectionStart || 0) : (activeEl.selectionEnd || 0);
+      return { blockId: block.id, blockIdx, kind: 'code', codeOffset: off };
+    }
+
+    const sel = window.getSelection();
+    const calcOffset = el => {
+      const full = Parser.extractInlineMarkdownFromElement(el);
+      if (!sel || sel.rangeCount === 0) return full.length;
+      const node = useAnchor ? sel.anchorNode : sel.focusNode;
+      const off = useAnchor ? sel.anchorOffset : sel.focusOffset;
+      if (!node || !el.contains(node)) return full.length;
+      return Math.min(full.length, measureMarkdownOffsetInElement(el, node, off));
+    };
+
+    if (block.type === 'paragraph' || block.type === 'heading' || block.type === 'blockquote' || block.type === 'callout') {
+      return { blockId: block.id, blockIdx, kind: 'editable', mdOffset: calcOffset(activeEl) };
+    }
+    if (block.type === 'ulist' || block.type === 'olist' || block.type === 'tasklist') {
+      const itemEls = Array.from(wrapper.querySelectorAll('.mk-editable'));
+      const itemIdx = Math.max(0, itemEls.indexOf(activeEl));
+      return {
+        blockId: block.id,
+        blockIdx,
+        kind: block.type === 'tasklist' ? 'taskitem' : 'listitem',
+        itemIdx,
+        mdOffset: calcOffset(activeEl)
+      };
+    }
+    if (block.type === 'table' && (activeEl.tagName === 'TH' || activeEl.tagName === 'TD')) {
+      const tr = activeEl.parentElement;
+      const colIdx = Math.max(0, Array.from(tr.children).indexOf(activeEl));
+      const rowIdx = activeEl.tagName === 'TH'
+        ? -1
+        : Math.max(0, Array.from(wrapper.querySelectorAll('tbody tr')).indexOf(tr));
+      return { blockId: block.id, blockIdx, kind: 'table', rowIdx, colIdx, mdOffset: calcOffset(activeEl) };
+    }
+    return makeBlockBoundaryEndpoint(blockIdx, false);
+  }
+
+  function clearCrossRangeVisuals() {
+    try {
+      if (typeof CSS !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('mk-cross-sel');
+      }
+    } catch (e) {}
+    const overlay = document.getElementById('cross-selection-overlay');
+    if (overlay) overlay.innerHTML = '';
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (canvas) {
+      canvas.querySelectorAll(':scope > .mk-block.is-range-covered').forEach(el => {
+        el.classList.remove('is-range-covered');
+      });
+    }
+  }
+
+  function collectCrossRangeDomPieces(norm) {
+    const domRanges = [];
+    const coveredBlockIds = new Set();
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (!canvas || !norm || norm.collapsed) return { domRanges, coveredBlockIds };
+
+    const { start, end } = norm;
+    for (let idx = start.blockIdx; idx <= end.blockIdx; idx++) {
+      const block = state.blocks[idx];
+      if (!block) continue;
+      const wrapper = canvas.querySelector(`[data-block-id="${block.id}"]`);
+      if (!wrapper) continue;
+      const isFirst = idx === start.blockIdx;
+      const isLast = idx === end.blockIdx;
+      const t = block.type;
+
+      if (t === 'paragraph' || t === 'heading' || t === 'blockquote' || t === 'callout') {
+        const el = wrapper.querySelector('.mk-editable');
+        if (!el) continue;
+        const fullLen = (block.text || '').length;
+        const sOff = isFirst ? (start.mdOffset || 0) : 0;
+        const eOff = isLast ? (end.mdOffset || 0) : fullLen;
+        if (eOff > sOff) {
+          const r = createDomRangeForMarkdownSlice(el, sOff, eOff);
+          if (r) domRanges.push(r);
+        }
+      } else if (t === 'ulist' || t === 'olist' || t === 'tasklist') {
+        const itemEls = Array.from(wrapper.querySelectorAll('.mk-editable'));
+        const sItem = isFirst ? (start.itemIdx || 0) : 0;
+        const eItem = isLast ? (end.itemIdx ?? itemEls.length - 1) : itemEls.length - 1;
+        for (let k = sItem; k <= eItem && k < itemEls.length; k++) {
+          const fullLen = getListItemText(block, k).length;
+          const sOff = isFirst && k === sItem ? (start.mdOffset || 0) : 0;
+          const eOff = isLast && k === eItem ? (end.mdOffset || 0) : fullLen;
+          if (eOff > sOff) {
+            const r = createDomRangeForMarkdownSlice(itemEls[k], sOff, eOff);
+            if (r) domRanges.push(r);
+          }
+        }
+      } else if (t === 'table') {
+        const theadCells = Array.from(wrapper.querySelectorAll('thead th'));
+        const bodyRows = Array.from(wrapper.querySelectorAll('tbody tr'));
+        const allRows = [
+          { rowIdx: -1, cells: theadCells },
+          ...bodyRows.map((tr, rIdx) => ({ rowIdx: rIdx, cells: Array.from(tr.querySelectorAll('td')) }))
+        ];
+        const sRow = isFirst ? (start.rowIdx ?? -1) : -1;
+        const eRow = isLast ? (end.rowIdx ?? bodyRows.length - 1) : bodyRows.length - 1;
+        allRows.forEach(rowObj => {
+          if (rowObj.rowIdx < sRow || rowObj.rowIdx > eRow) return;
+          const sCol = isFirst && rowObj.rowIdx === sRow ? (start.colIdx || 0) : 0;
+          const eCol = isLast && rowObj.rowIdx === eRow ? (end.colIdx ?? rowObj.cells.length - 1) : rowObj.cells.length - 1;
+          for (let c = sCol; c <= eCol && c < rowObj.cells.length; c++) {
+            const fullLen = getTableCellText(block, rowObj.rowIdx, c).length;
+            const sOff = isFirst && rowObj.rowIdx === sRow && c === sCol ? (start.mdOffset || 0) : 0;
+            const eOff = isLast && rowObj.rowIdx === eRow && c === eCol ? (end.mdOffset || 0) : fullLen;
+            if (eOff > sOff) {
+              const r = createDomRangeForMarkdownSlice(rowObj.cells[c], sOff, eOff);
+              if (r) domRanges.push(r);
+            }
+          }
+        });
+        if (!isFirst && !isLast) {
+          coveredBlockIds.add(block.id);
+        }
+      } else if (t === 'code') {
+        const fullLen = (block.code || '').length;
+        const sOff = isFirst ? (start.codeOffset || 0) : 0;
+        const eOff = isLast ? (end.codeOffset ?? fullLen) : fullLen;
+        if (eOff > sOff || (!isFirst && !isLast)) {
+          coveredBlockIds.add(block.id);
+        }
+      } else {
+        const includeSpecial = (!isFirst || start.edge === 'before') && (!isLast || end.edge === 'after');
+        if (includeSpecial) {
+          coveredBlockIds.add(block.id);
+        }
+      }
+    }
+    return { domRanges, coveredBlockIds };
+  }
+
+  function syncCrossRangeUI(focusBridge = true) {
+    const norm = normalizeCrossRange();
+    if (!norm || norm.collapsed || state.sourceMode) {
+      clearCrossRangeVisuals();
+      return;
+    }
+
+    if (focusBridge) {
+      // Ensure any previously focused editable blurs FIRST so its DOM stabilizes before building Range highlights
+      const bridge = document.getElementById('block-selection-bridge');
+      if (bridge) {
+        bridge.value = extractCrossRangeMarkdown() || ' ';
+        try {
+          bridge.focus({ preventScroll: true });
+        } catch (e) {
+          bridge.focus();
+        }
+        bridge.setSelectionRange(0, bridge.value.length);
+      }
+    }
+
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch (e) {}
+
+    const { domRanges, coveredBlockIds } = collectCrossRangeDomPieces(norm);
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (canvas) {
+      canvas.querySelectorAll(':scope > .mk-block').forEach(el => {
+        el.classList.toggle('is-range-covered', coveredBlockIds.has(el.dataset.blockId));
+      });
+    }
+
+    let usedNativeHighlight = false;
+    try {
+      if (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight !== 'undefined') {
+        if (domRanges.length > 0) {
+          CSS.highlights.set('mk-cross-sel', new Highlight(...domRanges));
+        } else {
+          CSS.highlights.delete('mk-cross-sel');
+        }
+        usedNativeHighlight = true;
+      }
+    } catch (e) {}
+
+    const overlay = document.getElementById('cross-selection-overlay');
+    const scroller = document.getElementById('editor-scroll-container');
+    if (overlay && scroller) {
+      overlay.innerHTML = '';
+      if (!usedNativeHighlight && domRanges.length > 0) {
+        const sr = scroller.getBoundingClientRect();
+        const frag = document.createDocumentFragment ? document.createDocumentFragment() : overlay;
+        domRanges.forEach(r => {
+          const rects = r.getClientRects ? Array.from(r.getClientRects()) : [];
+          rects.forEach(rc => {
+            if (rc.width <= 0 || rc.height <= 0) return;
+            const box = document.createElement('div');
+            box.className = 'cross-sel-rect';
+            box.style.top = `${rc.top - sr.top + scroller.scrollTop}px`;
+            box.style.left = `${rc.left - sr.left + scroller.scrollLeft}px`;
+            box.style.width = `${rc.width}px`;
+            box.style.height = `${rc.height}px`;
+            frag.appendChild(box);
+          });
+        });
+        if (frag !== overlay) overlay.appendChild(frag);
+      }
+    }
+
+    if (focusBridge && domRanges.length > 0) {
+      const toolbar = document.getElementById('floating-toolbar');
+      const rect = domRanges[0].getBoundingClientRect?.();
+      if (toolbar && rect && rect.width > 0) {
+        toolbar.style.top = `${Math.max(12, rect.top - 46)}px`;
+        toolbar.style.left = `${Math.max(16, rect.left + rect.width / 2 - 140)}px`;
+        toolbar.classList.add('visible');
+      }
+    }
+  }
+
+  function clearCrossRange(restoreFocus = false) {
+    const had = hasCrossRange();
+    const prevFocus = state.crossRange?.focus ? refreshEndpointIndex(state.crossRange.focus) : null;
+    state.crossRange = null;
+    if (had) {
+      clearCrossRangeVisuals();
+      hideFloatingToolbar();
+    }
+    if (restoreFocus && prevFocus) {
+      focusAtEndpoint(prevFocus);
+    }
+  }
+
+  function setCrossRange(anchorEp, focusEp, focusBridge = true) {
+    if (!anchorEp || !focusEp) return;
+    if (hasBlockSelection()) {
+      if (state.selectedBlockIds) state.selectedBlockIds.clear();
+      state.selectionAnchorBlockId = null;
+      state.selectionFocusBlockId = null;
+      syncBlockSelectionUI(false);
+    }
+    closeSlashMenu();
+    state.crossRange = { anchor: anchorEp, focus: focusEp };
+    state.activeBlockId = focusEp.blockId;
+    setActiveBlock(focusEp.blockId);
+    syncCrossRangeUI(focusBridge);
+  }
+
+  function focusAtEndpoint(ep) {
+    const refreshed = refreshEndpointIndex(ep);
+    if (!refreshed) return;
+    const block = state.blocks[refreshed.blockIdx];
+    if (!block) return;
+
+    if (refreshed.kind === 'listitem' || refreshed.kind === 'taskitem') {
+      focusListItem(block.id, refreshed.itemIdx || 0, refreshed.mdOffset || 0);
+      return;
+    }
+    if (refreshed.kind === 'code') {
+      focusBlockById(block.id, refreshed.codeOffset || 0);
+      return;
+    }
+    if (refreshed.kind === 'editable') {
+      focusBlockById(block.id, refreshed.mdOffset || 0);
+      return;
+    }
+    focusBlockById(block.id, refreshed.edge === 'after' ? 'end' : 'start');
+  }
+
+  function restoreIntraEditableSelectionFromCrossRange() {
+    const norm = normalizeCrossRange();
+    if (!norm || !isSameSubEditable(norm.start, norm.end)) return false;
+    const { start, end } = norm;
+    clearCrossRange(false);
+    const canvas = document.getElementById('wysiwyg-canvas');
+    const wrapper = canvas?.querySelector(`[data-block-id="${start.blockId}"]`);
+    if (!wrapper) return false;
+
+    if (start.kind === 'code') {
+      const ta = wrapper.querySelector('.mk-code-textarea');
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(start.codeOffset || 0, end.codeOffset || 0);
+        return true;
+      }
+      return false;
+    }
+
+    let el = null;
+    if (start.kind === 'editable') {
+      el = wrapper.querySelector('.mk-editable');
+    } else if (start.kind === 'listitem' || start.kind === 'taskitem') {
+      el = wrapper.querySelectorAll('.mk-editable')[start.itemIdx || 0];
+    } else if (start.kind === 'table') {
+      el = start.rowIdx === -1
+        ? wrapper.querySelectorAll('thead th')[start.colIdx || 0]
+        : wrapper.querySelectorAll('tbody tr')[start.rowIdx]?.querySelectorAll('td')[start.colIdx || 0];
+    }
+    if (!el) return false;
+
+    el.focus();
+    const r = createDomRangeForMarkdownSlice(el, start.mdOffset || 0, end.mdOffset || 0);
+    if (r) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      updateFloatingToolbar();
+      return true;
+    }
+    return false;
+  }
+
+  function extractCrossRangeMarkdown() {
+    const norm = normalizeCrossRange();
+    if (!norm || norm.collapsed) return '';
+    const { start, end } = norm;
+
+    const serializeListSlice = (block, sItem, sOff, eItem, eOff) => {
+      const lines = [];
+      for (let k = sItem; k <= eItem && k < (block.items || []).length; k++) {
+        const full = getListItemText(block, k);
+        const sub = full.slice(k === sItem ? sOff : 0, k === eItem ? eOff : full.length);
+        if (sItem === eItem) return sub;
+        if (block.type === 'olist') lines.push(`${k + 1}. ${sub}`);
+        else if (block.type === 'tasklist') lines.push(`- [${block.items[k]?.checked ? 'x' : ' '}] ${sub}`);
+        else lines.push(`- ${sub}`);
+      }
+      return lines.join('\n');
+    };
+
+    if (start.blockIdx === end.blockIdx) {
+      const blk = state.blocks[start.blockIdx];
+      if (!blk) return '';
+      if (blk.type === 'paragraph' || blk.type === 'heading' || blk.type === 'blockquote' || blk.type === 'callout') {
+        return (blk.text || '').slice(start.mdOffset || 0, end.mdOffset || 0);
+      }
+      if (blk.type === 'ulist' || blk.type === 'olist' || blk.type === 'tasklist') {
+        return serializeListSlice(blk, start.itemIdx || 0, start.mdOffset || 0, end.itemIdx || 0, end.mdOffset || 0);
+      }
+      if (blk.type === 'code') {
+        return (blk.code || '').slice(start.codeOffset || 0, end.codeOffset || 0);
+      }
+      return Parser.serializeBlocksToMarkdown([blk]);
+    }
+
+    const parts = [];
+    for (let idx = start.blockIdx; idx <= end.blockIdx; idx++) {
+      const blk = state.blocks[idx];
+      if (!blk) continue;
+      const isFirst = idx === start.blockIdx;
+      const isLast = idx === end.blockIdx;
+      const t = blk.type;
+
+      if (!isFirst && !isLast) {
+        parts.push(Parser.serializeBlocksToMarkdown([blk]));
+        continue;
+      }
+
+      if (t === 'paragraph') {
+        const txt = blk.text || '';
+        parts.push(isFirst ? txt.slice(start.mdOffset || 0) : txt.slice(0, end.mdOffset || 0));
+      } else if (t === 'heading') {
+        const txt = blk.text || '';
+        const slice = isFirst ? txt.slice(start.mdOffset || 0) : txt.slice(0, end.mdOffset || 0);
+        const includePrefix = isFirst ? (start.mdOffset || 0) === 0 : (end.mdOffset || 0) > 0;
+        parts.push(includePrefix ? `${'#'.repeat(blk.level || 1)} ${slice}` : slice);
+      } else if (t === 'blockquote') {
+        const txt = blk.text || '';
+        const slice = isFirst ? txt.slice(start.mdOffset || 0) : txt.slice(0, end.mdOffset || 0);
+        parts.push((isFirst && (start.mdOffset || 0) > 0) ? slice : `> ${slice}`);
+      } else if (t === 'callout') {
+        const txt = blk.text || '';
+        if (isFirst && (start.mdOffset || 0) === 0) {
+          parts.push(Parser.serializeBlocksToMarkdown([blk]));
+        } else {
+          parts.push(isFirst ? txt.slice(start.mdOffset || 0) : txt.slice(0, end.mdOffset || 0));
+        }
+      } else if (t === 'ulist' || t === 'olist' || t === 'tasklist') {
+        const lastK = Math.max(0, (blk.items || []).length - 1);
+        if (isFirst) {
+          parts.push(serializeListSlice(blk, start.itemIdx || 0, start.mdOffset || 0, lastK, getListItemText(blk, lastK).length));
+        } else {
+          parts.push(serializeListSlice(blk, 0, 0, end.itemIdx || 0, end.mdOffset || 0));
+        }
+      } else if (t === 'code') {
+        const code = blk.code || '';
+        const sub = isFirst ? code.slice(start.codeOffset || 0) : code.slice(0, end.codeOffset || 0);
+        parts.push('```' + (blk.lang || '') + '\n' + sub + (sub.endsWith('\n') ? '' : '\n') + '```');
+      } else {
+        const include = isFirst ? start.edge === 'before' : end.edge === 'after';
+        if (include) {
+          parts.push(Parser.serializeBlocksToMarkdown([blk]));
+        }
+      }
+    }
+    return parts.filter(Boolean).join('\n\n');
+  }
+
+  function isTextMergeableType(type) {
+    return type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'callout';
+  }
+
+  function deleteCrossRange(replacementInlineText = null) {
+    const norm = normalizeCrossRange();
+    if (!norm || norm.collapsed) return false;
+    const { start, end } = norm;
+    const ins = replacementInlineText !== null ? String(replacementInlineText) : '';
+
+    recordUndoSnapshot();
+    clearCrossRange(false);
+
+    // Case 1: Same block (e.g. multi-item list selection or multi-cell table selection)
+    if (start.blockIdx === end.blockIdx) {
+      const blk = state.blocks[start.blockIdx];
+      if (!blk) return false;
+      if (blk.type === 'ulist' || blk.type === 'olist' || blk.type === 'tasklist') {
+        const sItem = start.itemIdx || 0;
+        const eItem = end.itemIdx || 0;
+        const left = getListItemText(blk, sItem).slice(0, start.mdOffset || 0);
+        const right = getListItemText(blk, eItem).slice(end.mdOffset || 0);
+        const merged = left + ins + right;
+        setListItemText(blk, sItem, merged);
+        if (eItem > sItem) {
+          blk.items.splice(sItem + 1, eItem - sItem);
+        }
+        if (blk.items.length === 1 && merged === '' && replacementInlineText === null) {
+          state.blocks.splice(start.blockIdx, 1, { id: blk.id, type: 'paragraph', text: '' });
+          ensureTrailingParagraph();
+          state.activeBlockId = blk.id;
+          markDirtyAndSync(true);
+          renderCanvas();
+          focusBlockById(blk.id, 0);
+          return true;
+        }
+        markDirtyAndSync(false);
+        renderCanvas();
+        focusListItem(blk.id, sItem, (left + ins).length);
+        return true;
+      }
+      if (blk.type === 'table') {
+        if (isEndpointAtBlockStart(start) && isEndpointAtBlockEnd(end) && replacementInlineText === null) {
+          deleteBlock(blk.id);
+          return true;
+        }
+        const rowsCount = (blk.rows || []).length;
+        const colsCount = (blk.headers || []).length;
+        for (let r = start.rowIdx; r <= end.rowIdx; r++) {
+          const cStart = r === start.rowIdx ? start.colIdx : 0;
+          const cEnd = r === end.rowIdx ? end.colIdx : colsCount - 1;
+          for (let c = cStart; c <= cEnd; c++) {
+            const cur = getTableCellText(blk, r, c);
+            const sOff = r === start.rowIdx && c === start.colIdx ? (start.mdOffset || 0) : 0;
+            const eOff = r === end.rowIdx && c === end.colIdx ? (end.mdOffset || 0) : cur.length;
+            const fill = r === start.rowIdx && c === start.colIdx ? ins : '';
+            setTableCellText(blk, r, c, cur.slice(0, sOff) + fill + cur.slice(eOff));
+          }
+        }
+        markDirtyAndSync(false);
+        renderCanvas();
+        focusBlockById(blk.id, 'start');
+        return true;
+      }
+      if (isTextMergeableType(blk.type)) {
+        const left = (blk.text || '').slice(0, start.mdOffset || 0);
+        const right = (blk.text || '').slice(end.mdOffset || 0);
+        blk.text = left + ins + right;
+        markDirtyAndSync(blk.type === 'heading');
+        renderCanvas();
+        focusBlockById(blk.id, (left + ins).length);
+        return true;
+      }
+    }
+
+    // Case 2: Cross-block range (start.blockIdx < end.blockIdx)
+    const bStart = state.blocks[start.blockIdx];
+    const bEnd = state.blocks[end.blockIdx];
+    const startAtZero = isEndpointAtBlockStart(start);
+    const endAtMax = isEndpointAtBlockEnd(end);
+
+    // 2A: Both bStart and bEnd are text-like (paragraph, heading, blockquote, callout) -> Seamless Merge!
+    if (isTextMergeableType(bStart.type) && isTextMergeableType(bEnd.type)) {
+      const left = (bStart.text || '').slice(0, start.mdOffset || 0);
+      const right = (bEnd.text || '').slice(end.mdOffset || 0);
+      const caretOff = (left + ins).length;
+
+      // If user selected from very start of a heading/blockquote into a paragraph and hit Backspace,
+      // adopt bEnd's block style when right text survives (Word / Typora standard behavior).
+      let mergedBlock = { ...bStart, text: left + ins + right };
+      if (startAtZero && !endAtMax && bStart.type !== bEnd.type) {
+        mergedBlock = { ...bEnd, id: bStart.id, text: left + ins + right };
+      } else if (startAtZero && endAtMax && replacementInlineText === null) {
+        // Entire bStart .. bEnd selected from 0 to end: delete completely (unless sole remaining content)
+        state.blocks.splice(start.blockIdx, end.blockIdx - start.blockIdx + 1);
+        if (state.blocks.length === 0) {
+          const fresh = { id: Parser.nextBlockId(), type: 'paragraph', text: '' };
+          state.blocks = [fresh];
+          state.activeBlockId = fresh.id;
+          markDirtyAndSync(true);
+          renderCanvas();
+          focusBlockById(fresh.id, 0);
+          return true;
+        }
+        ensureTrailingParagraph();
+        const targetIdx = Math.min(Math.max(0, start.blockIdx - 1), state.blocks.length - 1);
+        const targetBlk = state.blocks[targetIdx];
+        state.activeBlockId = targetBlk.id;
+        markDirtyAndSync(true);
+        renderCanvas();
+        focusBlockById(targetBlk.id, start.blockIdx === 0 ? 'start' : 'end');
+        return true;
+      }
+
+      state.blocks.splice(start.blockIdx, end.blockIdx - start.blockIdx + 1, mergedBlock);
+      ensureTrailingParagraph();
+      state.activeBlockId = mergedBlock.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusBlockById(mergedBlock.id, caretOff);
+      return true;
+    }
+
+    // 2B: List <-> Text or List <-> List cross-block merge
+    const startIsList = bStart.type === 'ulist' || bStart.type === 'olist' || bStart.type === 'tasklist';
+    const endIsList = bEnd.type === 'ulist' || bEnd.type === 'olist' || bEnd.type === 'tasklist';
+
+    if (startIsList && (isTextMergeableType(bEnd.type) || endIsList) && !(startAtZero && endAtMax && replacementInlineText === null)) {
+      const sItem = start.itemIdx || 0;
+      const left = getListItemText(bStart, sItem).slice(0, start.mdOffset || 0);
+      const right = endIsList
+        ? getListItemText(bEnd, end.itemIdx || 0).slice(end.mdOffset || 0)
+        : (bEnd.text || '').slice(end.mdOffset || 0);
+      const caretOff = (left + ins).length;
+
+      bStart.items = bStart.items.slice(0, sItem + 1);
+      setListItemText(bStart, sItem, left + ins + right);
+
+      if (endIsList && bEnd.type === bStart.type && (end.itemIdx || 0) + 1 < bEnd.items.length) {
+        bStart.items.push(...bEnd.items.slice((end.itemIdx || 0) + 1));
+        state.blocks.splice(start.blockIdx + 1, end.blockIdx - start.blockIdx);
+      } else if (endIsList && (end.itemIdx || 0) + 1 < bEnd.items.length) {
+        bEnd.items = bEnd.items.slice((end.itemIdx || 0) + 1);
+        state.blocks.splice(start.blockIdx + 1, end.blockIdx - start.blockIdx - 1);
+      } else {
+        state.blocks.splice(start.blockIdx + 1, end.blockIdx - start.blockIdx);
+      }
+
+      ensureTrailingParagraph();
+      state.activeBlockId = bStart.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusListItem(bStart.id, sItem, caretOff);
+      return true;
+    }
+
+    if (isTextMergeableType(bStart.type) && endIsList && !(startAtZero && endAtMax && replacementInlineText === null)) {
+      const left = (bStart.text || '').slice(0, start.mdOffset || 0);
+      const eItem = end.itemIdx || 0;
+      const right = getListItemText(bEnd, eItem).slice(end.mdOffset || 0);
+      const caretOff = (left + ins).length;
+      bStart.text = left + ins + right;
+
+      if (eItem + 1 < bEnd.items.length) {
+        bEnd.items = bEnd.items.slice(eItem + 1);
+        state.blocks.splice(start.blockIdx + 1, end.blockIdx - start.blockIdx - 1);
+      } else {
+        state.blocks.splice(start.blockIdx + 1, end.blockIdx - start.blockIdx);
+      }
+
+      ensureTrailingParagraph();
+      state.activeBlockId = bStart.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusBlockById(bStart.id, caretOff);
+      return true;
+    }
+
+    // 2C: Heterogeneous cross-block selection involving Code / Table / Mermaid / Math / Image / HR
+    const survivors = [];
+    let focusTargetId = null;
+    let focusTargetOffset = 'end';
+
+    // Handle left remainder of bStart
+    if (isTextMergeableType(bStart.type)) {
+      if (!startAtZero || replacementInlineText !== null) {
+        const left = (bStart.text || '').slice(0, start.mdOffset || 0);
+        bStart.text = left + ins;
+        survivors.push(bStart);
+        focusTargetId = bStart.id;
+        focusTargetOffset = bStart.text.length;
+      }
+    } else if (startIsList) {
+      if (!startAtZero || replacementInlineText !== null) {
+        const sItem = start.itemIdx || 0;
+        bStart.items = bStart.items.slice(0, sItem + 1);
+        setListItemText(bStart, sItem, getListItemText(bStart, sItem).slice(0, start.mdOffset || 0) + ins);
+        survivors.push(bStart);
+        focusTargetId = bStart.id;
+        focusTargetOffset = 'end';
+      }
+    } else if (bStart.type === 'code') {
+      if (!startAtZero || replacementInlineText !== null) {
+        bStart.code = (bStart.code || '').slice(0, start.codeOffset || 0) + ins;
+        survivors.push(bStart);
+        focusTargetId = bStart.id;
+        focusTargetOffset = bStart.code.length;
+      }
+    } else if (bStart.type === 'special' || start.kind === 'special') {
+      if (start.edge === 'after') {
+        survivors.push(bStart);
+      }
+      if (replacementInlineText !== null) {
+        const p = { id: Parser.nextBlockId(), type: 'paragraph', text: ins };
+        survivors.push(p);
+        focusTargetId = p.id;
+        focusTargetOffset = ins.length;
+      }
+    } else if (bStart.type === 'table' && !startAtZero) {
+      const rowsCount = (bStart.rows || []).length;
+      const colsCount = (bStart.headers || []).length;
+      for (let r = start.rowIdx; r < rowsCount; r++) {
+        const cStart = r === start.rowIdx ? start.colIdx : 0;
+        for (let c = cStart; c < colsCount; c++) {
+          const cur = getTableCellText(bStart, r, c);
+          const sOff = r === start.rowIdx && c === start.colIdx ? (start.mdOffset || 0) : 0;
+          setTableCellText(bStart, r, c, cur.slice(0, sOff));
+        }
+      }
+      survivors.push(bStart);
+    }
+
+    // Handle right remainder of bEnd
+    if (isTextMergeableType(bEnd.type)) {
+      if (!endAtMax) {
+        const right = (bEnd.text || '').slice(end.mdOffset || 0);
+        if (survivors.length === 1 && isTextMergeableType(survivors[0].type)) {
+          const joinAt = survivors[0].text.length;
+          survivors[0].text += right;
+          focusTargetId = survivors[0].id;
+          focusTargetOffset = joinAt;
+        } else {
+          bEnd.text = right;
+          if (!focusTargetId) {
+            focusTargetId = bEnd.id;
+            focusTargetOffset = 0;
+          }
+          survivors.push(bEnd);
+        }
+      } else if (!focusTargetId && replacementInlineText !== null) {
+        const p = { id: Parser.nextBlockId(), type: 'paragraph', text: ins };
+        survivors.push(p);
+        focusTargetId = p.id;
+        focusTargetOffset = ins.length;
+      }
+    } else if (endIsList && !endAtMax) {
+      const eItem = end.itemIdx || 0;
+      setListItemText(bEnd, eItem, getListItemText(bEnd, eItem).slice(end.mdOffset || 0));
+      bEnd.items = bEnd.items.slice(eItem);
+      if (!focusTargetId) {
+        focusTargetId = bEnd.id;
+        focusTargetOffset = 'start';
+      }
+      survivors.push(bEnd);
+    } else if (bEnd.type === 'code' && !endAtMax) {
+      if (survivors.length === 1 && survivors[0].type === 'code') {
+        const joinAt = survivors[0].code.length;
+        survivors[0].code += (bEnd.code || '').slice(end.codeOffset || 0);
+        focusTargetId = survivors[0].id;
+        focusTargetOffset = joinAt;
+      } else {
+        bEnd.code = (bEnd.code || '').slice(end.codeOffset || 0);
+        if (!focusTargetId) {
+          focusTargetId = bEnd.id;
+          focusTargetOffset = 0;
+        }
+        survivors.push(bEnd);
+      }
+    } else if (end.kind === 'special' && end.edge === 'before') {
+      survivors.push(bEnd);
+    } else if (bEnd.type === 'table' && !endAtMax) {
+      const colsCount = (bEnd.headers || []).length;
+      for (let r = -1; r <= end.rowIdx; r++) {
+        const cEnd = r === end.rowIdx ? end.colIdx : colsCount - 1;
+        for (let c = 0; c <= cEnd; c++) {
+          const cur = getTableCellText(bEnd, r, c);
+          const eOff = r === end.rowIdx && c === end.colIdx ? (end.mdOffset || 0) : cur.length;
+          setTableCellText(bEnd, r, c, cur.slice(eOff));
+        }
+      }
+      survivors.push(bEnd);
+    }
+
+    state.blocks.splice(start.blockIdx, end.blockIdx - start.blockIdx + 1, ...survivors);
+    if (state.blocks.length === 0) {
+      const fresh = { id: Parser.nextBlockId(), type: 'paragraph', text: ins };
+      state.blocks = [fresh];
+      focusTargetId = fresh.id;
+      focusTargetOffset = ins.length;
+    }
+
+    ensureTrailingParagraph();
+    if (!focusTargetId) {
+      const nextIdx = Math.min(Math.max(0, start.blockIdx), state.blocks.length - 1);
+      focusTargetId = state.blocks[nextIdx].id;
+      focusTargetOffset = 'start';
+    }
+    state.activeBlockId = focusTargetId;
+    markDirtyAndSync(true);
+    renderCanvas();
+    focusBlockById(focusTargetId, focusTargetOffset);
+    return true;
+  }
+
+  function replaceCrossRangeWithMarkdown(rawText) {
+    const normalized = String(rawText || '').replace(/\r\n/g, '\n');
+    if (!normalized.includes('\n')) {
+      return deleteCrossRange(normalized);
+    }
+    const parsed = Parser.parseMarkdownToBlocks(normalized);
+    if (parsed.length === 0) {
+      return deleteCrossRange('');
+    }
+    if (parsed.length === 1 && parsed[0].type === 'paragraph') {
+      return deleteCrossRange(parsed[0].text || '');
+    }
+
+    // Delete cross range leaving caret at exact join point, then splice multi-block Markdown cleanly
+    const norm = normalizeCrossRange();
+    if (!norm) return false;
+    const { start, end } = norm;
+    const bStart = state.blocks[start.blockIdx];
+    const bEnd = state.blocks[end.blockIdx];
+
+    if (isTextMergeableType(bStart?.type) && isTextMergeableType(bEnd?.type)) {
+      recordUndoSnapshot();
+      clearCrossRange(false);
+      const left = (bStart.text || '').slice(0, start.mdOffset || 0);
+      const right = (bEnd.text || '').slice(end.mdOffset || 0);
+      const toInsert = [];
+      if (left !== '') {
+        if (parsed[0].type === 'paragraph') {
+          parsed[0] = { ...bStart, id: bStart.id, text: left + (parsed[0].text || '') };
+        } else {
+          toInsert.push({ ...bStart, id: bStart.id, text: left });
+        }
+      }
+      toInsert.push(...parsed);
+      const lastNew = toInsert[toInsert.length - 1];
+      let caretTarget = 'end';
+      if (right !== '') {
+        if (isTextMergeableType(lastNew.type)) {
+          caretTarget = (lastNew.text || '').length;
+          lastNew.text = (lastNew.text || '') + right;
+        } else {
+          toInsert.push({ ...bEnd, id: Parser.nextBlockId(), text: right });
+          caretTarget = 0;
+        }
+      }
+      state.blocks.splice(start.blockIdx, end.blockIdx - start.blockIdx + 1, ...toInsert);
+      ensureTrailingParagraph();
+      const focusBlk = toInsert[toInsert.length - 1];
+      state.activeBlockId = focusBlk.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusBlockById(focusBlk.id, caretTarget);
+      return true;
+    }
+
+    deleteCrossRange('');
+    const activeIdx = Math.max(0, state.blocks.findIndex(b => b.id === state.activeBlockId));
+    state.blocks.splice(activeIdx + 1, 0, ...parsed);
+    ensureTrailingParagraph();
+    const lastBlk = parsed[parsed.length - 1];
+    state.activeBlockId = lastBlk.id;
+    markDirtyAndSync(true);
+    renderCanvas();
+    focusBlockById(lastBlk.id, 'end');
+    return true;
+  }
+
+  function applyInlineFormattingToCrossRange(wrapperSymbol, suffixSymbol = wrapperSymbol) {
+    const norm = normalizeCrossRange();
+    if (!norm || norm.collapsed) return false;
+    const { start, end, reversed } = norm;
+    const addLen = wrapperSymbol.length + suffixSymbol.length;
+
+    recordUndoSnapshot();
+    let newStart = { ...start };
+    let newEnd = { ...end };
+
+    for (let idx = start.blockIdx; idx <= end.blockIdx; idx++) {
+      const blk = state.blocks[idx];
+      if (!blk) continue;
+      const isFirst = idx === start.blockIdx;
+      const isLast = idx === end.blockIdx;
+
+      if (isTextMergeableType(blk.type)) {
+        const full = blk.text || '';
+        const sOff = isFirst ? (start.mdOffset || 0) : 0;
+        const eOff = isLast ? (end.mdOffset || 0) : full.length;
+        if (eOff > sOff) {
+          const mid = full.slice(sOff, eOff);
+          blk.text = full.slice(0, sOff) + wrapperSymbol + mid + suffixSymbol + full.slice(eOff);
+          if (isLast) {
+            newEnd.mdOffset = eOff + addLen;
+          }
+        }
+      } else if (blk.type === 'ulist' || blk.type === 'olist' || blk.type === 'tasklist') {
+        const sItem = isFirst ? (start.itemIdx || 0) : 0;
+        const eItem = isLast ? (end.itemIdx ?? blk.items.length - 1) : blk.items.length - 1;
+        for (let k = sItem; k <= eItem && k < blk.items.length; k++) {
+          const full = getListItemText(blk, k);
+          const sOff = isFirst && k === sItem ? (start.mdOffset || 0) : 0;
+          const eOff = isLast && k === eItem ? (end.mdOffset || 0) : full.length;
+          if (eOff > sOff) {
+            setListItemText(blk, k, full.slice(0, sOff) + wrapperSymbol + full.slice(sOff, eOff) + suffixSymbol + full.slice(eOff));
+            if (isLast && k === eItem) {
+              newEnd.mdOffset = eOff + addLen;
+            }
+          }
+        }
+      }
+    }
+
+    markDirtyAndSync(false);
+    renderCanvas();
+    state.crossRange = reversed ? { anchor: newEnd, focus: newStart } : { anchor: newStart, focus: newEnd };
+    syncCrossRangeUI(true);
+    return true;
+  }
+
+  function stepEndpointByArrow(ep, key) {
+    const cur = refreshEndpointIndex(ep);
+    if (!cur) return null;
+    const block = state.blocks[cur.blockIdx];
+    if (!block) return null;
+
+    if (key === 'ArrowRight') {
+      if (cur.kind === 'editable') {
+        const len = (block.text || '').length;
+        if ((cur.mdOffset || 0) < len) return { ...cur, mdOffset: (cur.mdOffset || 0) + 1 };
+      } else if (cur.kind === 'listitem' || cur.kind === 'taskitem') {
+        const len = getListItemText(block, cur.itemIdx || 0).length;
+        if ((cur.mdOffset || 0) < len) return { ...cur, mdOffset: (cur.mdOffset || 0) + 1 };
+        if ((cur.itemIdx || 0) + 1 < block.items.length) return { ...cur, itemIdx: (cur.itemIdx || 0) + 1, mdOffset: 0 };
+      } else if (cur.kind === 'code') {
+        const len = (block.code || '').length;
+        if ((cur.codeOffset || 0) < len) return { ...cur, codeOffset: (cur.codeOffset || 0) + 1 };
+      } else if (cur.kind === 'special' && cur.edge === 'before') {
+        return { ...cur, edge: 'after' };
+      }
+      if (cur.blockIdx + 1 < state.blocks.length) {
+        return makeBlockBoundaryEndpoint(cur.blockIdx + 1, false);
+      }
+      return cur;
+    }
+
+    if (key === 'ArrowLeft') {
+      if (cur.kind === 'editable') {
+        if ((cur.mdOffset || 0) > 0) return { ...cur, mdOffset: (cur.mdOffset || 0) - 1 };
+      } else if (cur.kind === 'listitem' || cur.kind === 'taskitem') {
+        if ((cur.mdOffset || 0) > 0) return { ...cur, mdOffset: (cur.mdOffset || 0) - 1 };
+        if ((cur.itemIdx || 0) > 0) {
+          const prevIdx = (cur.itemIdx || 0) - 1;
+          return { ...cur, itemIdx: prevIdx, mdOffset: getListItemText(block, prevIdx).length };
+        }
+      } else if (cur.kind === 'code') {
+        if ((cur.codeOffset || 0) > 0) return { ...cur, codeOffset: (cur.codeOffset || 0) - 1 };
+      } else if (cur.kind === 'special' && cur.edge === 'after') {
+        return { ...cur, edge: 'before' };
+      }
+      if (cur.blockIdx > 0) {
+        return makeBlockBoundaryEndpoint(cur.blockIdx - 1, true);
+      }
+      return cur;
+    }
+
+    if (key === 'ArrowDown') {
+      if ((cur.kind === 'listitem' || cur.kind === 'taskitem') && (cur.itemIdx || 0) + 1 < block.items.length) {
+        const nextItem = (cur.itemIdx || 0) + 1;
+        const nextLen = getListItemText(block, nextItem).length;
+        return { ...cur, itemIdx: nextItem, mdOffset: Math.min(nextLen, cur.mdOffset || 0) };
+      }
+      if (cur.blockIdx + 1 < state.blocks.length) {
+        const nextBlk = state.blocks[cur.blockIdx + 1];
+        if (isTextMergeableType(nextBlk.type)) {
+          return {
+            blockId: nextBlk.id,
+            blockIdx: cur.blockIdx + 1,
+            kind: 'editable',
+            mdOffset: Math.min((nextBlk.text || '').length, cur.mdOffset || 0)
+          };
+        }
+        return makeBlockBoundaryEndpoint(cur.blockIdx + 1, true);
+      }
+      return makeBlockBoundaryEndpoint(cur.blockIdx, true);
+    }
+
+    if (key === 'ArrowUp') {
+      if ((cur.kind === 'listitem' || cur.kind === 'taskitem') && (cur.itemIdx || 0) > 0) {
+        const prevItem = (cur.itemIdx || 0) - 1;
+        const prevLen = getListItemText(block, prevItem).length;
+        return { ...cur, itemIdx: prevItem, mdOffset: Math.min(prevLen, cur.mdOffset || 0) };
+      }
+      if (cur.blockIdx > 0) {
+        const prevBlk = state.blocks[cur.blockIdx - 1];
+        if (isTextMergeableType(prevBlk.type)) {
+          return {
+            blockId: prevBlk.id,
+            blockIdx: cur.blockIdx - 1,
+            kind: 'editable',
+            mdOffset: Math.min((prevBlk.text || '').length, cur.mdOffset || 0)
+          };
+        }
+        return makeBlockBoundaryEndpoint(cur.blockIdx - 1, false);
+      }
+      return makeBlockBoundaryEndpoint(0, false);
+    }
+
+    return cur;
+  }
+
+  function tryStartCrossRangeFromEditableKey(el, block, itemIdx, key) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !el.contains(sel.focusNode)) return false;
+
+    const full = Parser.extractInlineMarkdownFromElement(el);
+    const focusMd = Math.min(full.length, measureMarkdownOffsetInElement(el, sel.focusNode, sel.focusOffset));
+    const anchorMd = sel.anchorNode && el.contains(sel.anchorNode)
+      ? Math.min(full.length, measureMarkdownOffsetInElement(el, sel.anchorNode, sel.anchorOffset))
+      : focusMd;
+
+    const blockIdx = state.blocks.findIndex(b => b.id === block.id);
+    if (blockIdx === -1) return false;
+
+    let shouldCross = false;
+    if (key === 'ArrowLeft' && focusMd === 0) {
+      shouldCross = itemIdx !== null ? (itemIdx > 0 || blockIdx > 0) : blockIdx > 0;
+    } else if (key === 'ArrowRight' && focusMd >= full.length) {
+      shouldCross = itemIdx !== null
+        ? (itemIdx < (block.items?.length || 1) - 1 || blockIdx < state.blocks.length - 1)
+        : blockIdx < state.blocks.length - 1;
+    } else if (key === 'ArrowUp') {
+      const focusRange = document.createRange();
+      focusRange.setStart(sel.focusNode, sel.focusOffset);
+      focusRange.collapse(true);
+      const rects = focusRange.getClientRects?.() || [];
+      const elRect = el.getBoundingClientRect();
+      const atTopLine = focusMd === 0 || (rects.length > 0 && rects[0].top <= elRect.top + 14);
+      shouldCross = atTopLine && (itemIdx !== null ? (itemIdx > 0 || blockIdx > 0) : blockIdx > 0);
+    } else if (key === 'ArrowDown') {
+      const focusRange = document.createRange();
+      focusRange.setStart(sel.focusNode, sel.focusOffset);
+      focusRange.collapse(true);
+      const rects = focusRange.getClientRects?.() || [];
+      const elRect = el.getBoundingClientRect();
+      const atBottomLine = focusMd >= full.length || (rects.length > 0 && rects[rects.length - 1].bottom >= elRect.bottom - 14);
+      shouldCross = atBottomLine && (itemIdx !== null
+        ? (itemIdx < (block.items?.length || 1) - 1 || blockIdx < state.blocks.length - 1)
+        : blockIdx < state.blocks.length - 1);
+    }
+
+    if (!shouldCross) return false;
+
+    const kind = itemIdx !== null ? (block.type === 'tasklist' ? 'taskitem' : 'listitem') : 'editable';
+    const anchorEp = itemIdx !== null
+      ? { blockId: block.id, blockIdx, kind, itemIdx, mdOffset: anchorMd }
+      : { blockId: block.id, blockIdx, kind, mdOffset: anchorMd };
+    const focusEp = itemIdx !== null
+      ? { blockId: block.id, blockIdx, kind, itemIdx, mdOffset: focusMd }
+      : { blockId: block.id, blockIdx, kind, mdOffset: focusMd };
+
+    const nextFocus = stepEndpointByArrow(focusEp, key);
+    if (!nextFocus) return false;
+    setCrossRange(anchorEp, nextFocus, true);
+    const domEl = document.querySelector(`[data-block-id="${nextFocus.blockId}"]`);
+    domEl?.scrollIntoView({ block: 'nearest' });
+    return true;
+  }
+
+  function clearBlockSelection(restoreFocus = false) {
+    clearCrossRange(false);
+    const hadSelection = hasBlockSelection();
+    if (state.selectedBlockIds) state.selectedBlockIds.clear();
+    state.selectionAnchorBlockId = null;
+    state.selectionFocusBlockId = null;
+    if (hadSelection) {
+      syncBlockSelectionUI(false);
+    }
+    if (restoreFocus && state.activeBlockId) {
+      focusBlockById(state.activeBlockId, 'end');
+    }
+  }
+
+  function selectSingleBlock(blockId, focusBridge = true) {
+    if (!blockId || !state.blocks.some(b => b.id === blockId)) return;
+    closeSlashMenu();
+    state.editingSpecialId = null;
+    state.activeBlockId = blockId;
+    state.selectionAnchorBlockId = blockId;
+    state.selectionFocusBlockId = blockId;
+    state.selectedBlockIds = new Set([blockId]);
+    setActiveBlock(blockId);
+    syncBlockSelectionUI(focusBridge);
+  }
+
+  function toggleSingleBlockSelection(blockId) {
+    if (!blockId || !state.blocks.some(b => b.id === blockId)) return;
+    closeSlashMenu();
+    if (state.selectedBlockIds.has(blockId)) {
+      state.selectedBlockIds.delete(blockId);
+      if (state.selectedBlockIds.size === 0) {
+        clearBlockSelection(false);
+        return;
+      }
+    } else {
+      state.selectedBlockIds.add(blockId);
+    }
+    state.selectionAnchorBlockId = blockId;
+    state.selectionFocusBlockId = blockId;
+    setActiveBlock(blockId);
+    syncBlockSelectionUI(true);
+  }
+
+  function setBlockRangeSelection(anchorBlockId, focusBlockId, focusBridge = true) {
+    const idxA = state.blocks.findIndex(b => b.id === anchorBlockId);
+    const idxB = state.blocks.findIndex(b => b.id === focusBlockId);
+    if (idxA === -1 && idxB === -1) return;
+    const realA = idxA === -1 ? idxB : idxA;
+    const realB = idxB === -1 ? idxA : idxB;
+    const lo = Math.min(realA, realB);
+    const hi = Math.max(realA, realB);
+
+    closeSlashMenu();
+    state.editingSpecialId = null;
+    state.selectionAnchorBlockId = state.blocks[realA].id;
+    state.selectionFocusBlockId = state.blocks[realB].id;
+    state.activeBlockId = state.blocks[realB].id;
+
+    const nextSet = new Set();
+    for (let i = lo; i <= hi; i++) {
+      nextSet.add(state.blocks[i].id);
+    }
+    state.selectedBlockIds = nextSet;
+    setActiveBlock(state.activeBlockId);
+    syncBlockSelectionUI(focusBridge);
+  }
+
+  function selectAllBlocks() {
+    if (state.blocks.length === 0) return;
+    setBlockRangeSelection(state.blocks[0].id, state.blocks[state.blocks.length - 1].id, true);
+  }
+
+  function extendBlockSelectionByStep(step) {
+    if (state.blocks.length === 0) return;
+    const anchorId = state.selectionAnchorBlockId || state.activeBlockId || state.blocks[0].id;
+    const focusId = state.selectionFocusBlockId || anchorId;
+    const curFocusIdx = Math.max(0, state.blocks.findIndex(b => b.id === focusId));
+    const nextFocusIdx = Math.min(state.blocks.length - 1, Math.max(0, curFocusIdx + step));
+    const nextFocusBlock = state.blocks[nextFocusIdx];
+    setBlockRangeSelection(anchorId, nextFocusBlock.id, true);
+    const domEl = document.querySelector(`[data-block-id="${nextFocusBlock.id}"]`);
+    domEl?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function deleteSelectedBlocks(direction = 'backward') {
+    const indices = getSelectedBlockIndices();
+    if (indices.length === 0) return false;
+
+    recordUndoSnapshot();
+    const firstIdx = indices[0];
+    const selectedSet = new Set(state.selectedBlockIds);
+    state.blocks = state.blocks.filter(b => !selectedSet.has(b.id));
+    clearBlockSelection(false);
+
+    if (state.blocks.length === 0) {
+      const fresh = { id: Parser.nextBlockId(), type: 'paragraph', text: '' };
+      state.blocks = [fresh];
+      state.activeBlockId = fresh.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusBlockById(fresh.id, 'start');
+      return true;
+    }
+
+    ensureTrailingParagraph();
+    const targetIdx = direction === 'forward'
+      ? Math.min(firstIdx, state.blocks.length - 1)
+      : Math.max(0, Math.min(firstIdx - 1, state.blocks.length - 1));
+    const targetBlock = state.blocks[targetIdx];
+    state.activeBlockId = targetBlock.id;
+    markDirtyAndSync(true);
+    renderCanvas();
+    focusBlockById(targetBlock.id, direction === 'forward' || firstIdx === 0 ? 'start' : 'end');
+    return true;
+  }
+
+  function cloneBlockWithNewId(block) {
+    const copy = JSON.parse(JSON.stringify(block));
+    copy.id = Parser.nextBlockId();
+    return copy;
+  }
+
+  function duplicateBlocksByIds(idsArray = null) {
+    const indices = idsArray && idsArray.length > 0
+      ? idsArray.map(id => state.blocks.findIndex(b => b.id === id)).filter(i => i >= 0).sort((a, b) => a - b)
+      : (hasBlockSelection() ? getSelectedBlockIndices() : [state.blocks.findIndex(b => b.id === state.activeBlockId)].filter(i => i >= 0));
+    if (indices.length === 0) return;
+
+    recordUndoSnapshot();
+    const clones = indices.map(i => cloneBlockWithNewId(state.blocks[i]));
+    const insertAt = indices[indices.length - 1] + 1;
+    state.blocks.splice(insertAt, 0, ...clones);
+    ensureTrailingParagraph();
+    markDirtyAndSync(true);
+    renderCanvas();
+    setBlockRangeSelection(clones[0].id, clones[clones.length - 1].id, true);
+    showToast(clones.length > 1 ? `已克隆 ${clones.length} 个块` : '已克隆当前块');
+  }
+
+  function moveBlocksByStep(delta) {
+    const indices = hasBlockSelection()
+      ? getSelectedBlockIndices()
+      : [state.blocks.findIndex(b => b.id === state.activeBlockId)].filter(i => i >= 0);
+    if (indices.length === 0) return;
+
+    // Require contiguous selection (or single block) for unambiguous reordering
+    const minIdx = indices[0];
+    const maxIdx = indices[indices.length - 1];
+    if (maxIdx - minIdx + 1 !== indices.length) return;
+    if (delta < 0 && minIdx === 0) return;
+    if (delta > 0 && maxIdx >= state.blocks.length - 1) return;
+
+    const wasMultiSelected = hasBlockSelection();
+    recordUndoSnapshot();
+    const moving = state.blocks.splice(minIdx, indices.length);
+    const targetInsert = Math.max(0, Math.min(state.blocks.length, minIdx + delta));
+    state.blocks.splice(targetInsert, 0, ...moving);
+    ensureTrailingParagraph();
+    markDirtyAndSync(true);
+    renderCanvas();
+
+    if (wasMultiSelected) {
+      setBlockRangeSelection(moving[0].id, moving[moving.length - 1].id, true);
+    } else {
+      focusBlockById(moving[0].id, 'end');
+    }
+  }
+
+  function replaceSelectedBlocksWithMarkdown(mdText) {
+    const indices = getSelectedBlockIndices();
+    if (indices.length === 0) return false;
+
+    recordUndoSnapshot();
+    const firstIdx = indices[0];
+    const selectedSet = new Set(state.selectedBlockIds);
+    const remaining = [];
+    let inserted = false;
+    const parsed = Parser.parseMarkdownToBlocks(String(mdText || ''));
+    const replacement = parsed.length > 0
+      ? parsed
+      : [{ id: Parser.nextBlockId(), type: 'paragraph', text: '' }];
+
+    state.blocks.forEach((blk, idx) => {
+      if (selectedSet.has(blk.id)) {
+        if (!inserted && idx >= firstIdx) {
+          remaining.push(...replacement);
+          inserted = true;
+        }
+      } else {
+        remaining.push(blk);
+      }
+    });
+    if (!inserted) {
+      remaining.push(...replacement);
+    }
+
+    state.blocks = remaining;
+    clearBlockSelection(false);
+    ensureTrailingParagraph();
+    const lastInserted = replacement[replacement.length - 1];
+    state.activeBlockId = lastInserted.id;
+    markDirtyAndSync(true);
+    renderCanvas();
+    focusBlockById(lastInserted.id, 'end');
+    return true;
+  }
+
+  function handlePasteMarkdownIntoEditable(editable, rawText) {
+    const blockWrapper = editable.closest('.mk-block');
+    const blockIdx = state.blocks.findIndex(b => b.id === blockWrapper?.dataset.blockId);
+    if (blockIdx === -1) return false;
+    const block = state.blocks[blockIdx];
+
+    const normalized = String(rawText || '').replace(/\r\n/g, '\n');
+    const isMultiLine = normalized.includes('\n');
+    const looksLikeBlockSyntax = /^(\s{0,3}#{1,6}\s|```|\$\$|\|.*\|\s*$|[-*+]\s+\[[ xX]\]\s|[-*+]\s+|1\.\s+|>\s+|---|\*\*\*)/.test(normalized);
+
+    // Single-line plain inline text inside an existing editable: insert cleanly without HTML style soup
+    if (!isMultiLine && !(looksLikeBlockSyntax && (editable.textContent || '').trim() === '')) {
+      recordUndoSnapshot('paste:' + block.id);
+      document.execCommand('insertText', false, normalized);
+      return true;
+    }
+
+    // Multi-block paste into simple text blocks (paragraph, heading, blockquote, callout)
+    if (block.type === 'paragraph' || block.type === 'heading' || block.type === 'blockquote' || block.type === 'callout') {
+      const { full, start, end } = extractMarkdownWithCaret(editable);
+      const before = full.slice(0, start);
+      const after = full.slice(end);
+      const parsed = Parser.parseMarkdownToBlocks(normalized);
+      if (parsed.length === 0) return false;
+
+      recordUndoSnapshot();
+      const toInsert = [];
+      if (before !== '') {
+        if (parsed[0].type === 'paragraph') {
+          parsed[0] = {
+            ...block,
+            id: block.id,
+            text: before + (parsed[0].text || '')
+          };
+        } else {
+          toInsert.push({ ...block, id: block.id, text: before });
+        }
+      }
+      toInsert.push(...parsed);
+
+      const lastNew = toInsert[toInsert.length - 1];
+      let focusTargetOffset = 'end';
+      if (after !== '') {
+        if (lastNew.type === 'paragraph' || lastNew.type === 'heading' || lastNew.type === 'blockquote') {
+          focusTargetOffset = (lastNew.text || '').length;
+          lastNew.text = (lastNew.text || '') + after;
+        } else {
+          toInsert.push({ id: Parser.nextBlockId(), type: 'paragraph', text: after });
+          focusTargetOffset = 0;
+        }
+      }
+
+      state.blocks.splice(blockIdx, 1, ...toInsert);
+      ensureTrailingParagraph();
+      const focusBlk = toInsert[toInsert.length - 1];
+      state.activeBlockId = focusBlk.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusBlockById(focusBlk.id, focusTargetOffset);
+      return true;
+    }
+
+    // Multi-line paste inside list/table cell: insert after current block cleanly
+    const parsed = Parser.parseMarkdownToBlocks(normalized);
+    if (parsed.length > 0) {
+      recordUndoSnapshot();
+      state.blocks.splice(blockIdx + 1, 0, ...parsed);
+      ensureTrailingParagraph();
+      const lastBlk = parsed[parsed.length - 1];
+      state.activeBlockId = lastBlk.id;
+      markDirtyAndSync(true);
+      renderCanvas();
+      focusBlockById(lastBlk.id, 'end');
+      return true;
+    }
+    return false;
+  }
+
+  function handleSelectAllCommand() {
+    const activeEl = document.activeElement;
+    if (
+      activeEl &&
+      activeEl.tagName === 'INPUT' &&
+      activeEl.type !== 'checkbox'
+    ) {
+      activeEl.select();
+      return;
+    }
+
+    if (state.sourceMode) {
+      const srcTa = document.getElementById('source-textarea');
+      srcTa?.focus();
+      srcTa?.select();
+      return;
+    }
+
+    if (hasBlockSelection() || hasCrossRange()) {
+      selectAllBlocks();
+      return;
+    }
+
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (activeEl && canvas && canvas.contains(activeEl)) {
+      if (activeEl.tagName === 'TEXTAREA') {
+        const len = (activeEl.value || '').length;
+        const alreadyAll = len === 0 || (activeEl.selectionStart === 0 && activeEl.selectionEnd === len);
+        if (!alreadyAll) {
+          activeEl.select();
+          return;
+        }
+        activeEl.blur();
+        selectAllBlocks();
+        return;
+      }
+
+      if (activeEl.isContentEditable) {
+        const totalLen = (activeEl.textContent || '').length;
+        const sel = window.getSelection();
+        const selLen = (
+          sel &&
+          !sel.isCollapsed &&
+          activeEl.contains(sel.anchorNode) &&
+          activeEl.contains(sel.focusNode)
+        )
+          ? sel.toString().length
+          : 0;
+        if (totalLen > 0 && selLen < totalLen) {
+          const range = document.createRange();
+          range.selectNodeContents(activeEl);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          updateFloatingToolbar();
+          return;
+        }
+        activeEl.blur();
+        selectAllBlocks();
+        return;
+      }
+    }
+
+    selectAllBlocks();
   }
 
   function focusBlockById(blockId, caretTarget = 'end') {
@@ -2315,6 +4537,11 @@
       return;
     }
 
+    if (hasCrossRange()) {
+      applyInlineFormattingToCrossRange(wrapperSymbol, suffixSymbol);
+      return;
+    }
+
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
 
@@ -2350,25 +4577,97 @@
   }
 
   /* ==========================================================================
-   * SLASH COMMAND MENU (/)
+   * SLASH COMMAND MENU (/) & GUTTER BLOCK ACTION MENU
    * ========================================================================== */
 
-  function openSlashMenuForBlock(blockWrapper) {
+  function getActiveSlashCommands() {
+    if (state.slashMenuMode === 'gutter') {
+      const gutterActions = [
+        {
+          id: 'gutter-delete',
+          icon: '✕',
+          title: '删除当前块',
+          desc: '移除该内容块（支持 Cmd+Z 撤销）',
+          danger: true,
+          action: () => {
+            const id = state.activeBlockId;
+            closeSlashMenu();
+            if (id) deleteBlock(id);
+          }
+        },
+        {
+          id: 'gutter-select',
+          icon: '▣',
+          title: '选中当前块',
+          desc: '进入块级操作模式（Shift+点击可跨块多选）',
+          action: () => {
+            const id = state.activeBlockId;
+            closeSlashMenu();
+            if (id) selectSingleBlock(id, true);
+          }
+        },
+        {
+          id: 'gutter-duplicate',
+          icon: '❐',
+          title: '克隆当前块',
+          desc: '在下方复制一份相同块 (Cmd+D)',
+          action: () => {
+            const id = state.activeBlockId;
+            closeSlashMenu();
+            if (id) duplicateBlocksByIds([id]);
+          }
+        },
+        {
+          id: 'gutter-insert-above',
+          icon: '↑',
+          title: '在上方插入空段落',
+          desc: '在当前块前面新建一行',
+          action: () => {
+            const id = state.activeBlockId;
+            closeSlashMenu();
+            if (id) insertBlockBefore(id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+          }
+        },
+        {
+          id: 'gutter-insert-below',
+          icon: '↓',
+          title: '在下方插入空段落',
+          desc: '在当前块后面新建一行',
+          dividerAfter: true,
+          action: () => {
+            const id = state.activeBlockId;
+            closeSlashMenu();
+            if (id) insertBlockAfter(id, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+          }
+        }
+      ];
+      return [...gutterActions, ...SLASH_COMMANDS];
+    }
+    return SLASH_COMMANDS;
+  }
+
+  function openSlashMenuForBlock(blockWrapper, mode = 'slash') {
     const menu = document.getElementById('slash-menu');
     if (!menu || !blockWrapper) return;
 
+    if (blockWrapper.dataset.blockId) {
+      setActiveBlock(blockWrapper.dataset.blockId);
+    }
+    state.slashMenuMode = mode;
     state.slashMenuOpen = true;
     state.slashSelectedIndex = 0;
     renderSlashMenuItems();
 
     const rect = blockWrapper.getBoundingClientRect();
-    menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 320)}px`;
-    menu.style.left = `${Math.max(rect.left + 24, 60)}px`;
+    const preferredTop = mode === 'gutter' ? rect.top + 28 : rect.bottom + 6;
+    menu.style.top = `${Math.max(48, Math.min(preferredTop, window.innerHeight - 330))}px`;
+    menu.style.left = `${Math.max(rect.left + (mode === 'gutter' ? 0 : 24), 48)}px`;
     menu.classList.add('visible');
   }
 
   function closeSlashMenu() {
     state.slashMenuOpen = false;
+    state.slashMenuMode = 'slash';
     const menu = document.getElementById('slash-menu');
     if (menu) menu.classList.remove('visible');
   }
@@ -2376,41 +4675,47 @@
   function renderSlashMenuItems() {
     const menu = document.getElementById('slash-menu');
     if (!menu) return;
-    menu.innerHTML = SLASH_COMMANDS.map((cmd, idx) => `
-      <div class="slash-item ${idx === state.slashSelectedIndex ? 'is-selected' : ''}" data-idx="${idx}">
+    const commands = getActiveSlashCommands();
+    menu.innerHTML = commands.map((cmd, idx) => `
+      <div class="slash-item ${idx === state.slashSelectedIndex ? 'is-selected' : ''} ${cmd.danger ? 'is-danger' : ''}" data-idx="${idx}">
         <span class="slash-icon">${cmd.icon}</span>
         <div class="slash-meta">
           <div class="slash-title">${cmd.title}</div>
           <div class="slash-desc">${cmd.desc}</div>
         </div>
       </div>
+      ${cmd.dividerAfter ? '<div class="slash-divider"></div>' : ''}
     `).join('');
 
     menu.querySelectorAll('.slash-item').forEach(item => {
       item.addEventListener('mousedown', e => {
         e.preventDefault();
         const idx = Number(item.dataset.idx);
-        SLASH_COMMANDS[idx]?.action();
+        commands[idx]?.action();
       });
     });
+
+    const selectedEl = menu.querySelector('.slash-item.is-selected');
+    selectedEl?.scrollIntoView({ block: 'nearest' });
   }
 
   function handleSlashMenuKeydown(e) {
+    const commands = getActiveSlashCommands();
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      state.slashSelectedIndex = (state.slashSelectedIndex + 1) % SLASH_COMMANDS.length;
+      state.slashSelectedIndex = (state.slashSelectedIndex + 1) % commands.length;
       renderSlashMenuItems();
       return true;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      state.slashSelectedIndex = (state.slashSelectedIndex - 1 + SLASH_COMMANDS.length) % SLASH_COMMANDS.length;
+      state.slashSelectedIndex = (state.slashSelectedIndex - 1 + commands.length) % commands.length;
       renderSlashMenuItems();
       return true;
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      SLASH_COMMANDS[state.slashSelectedIndex]?.action();
+      commands[state.slashSelectedIndex]?.action();
       return true;
     }
     if (e.key === 'Escape') {
@@ -2426,6 +4731,7 @@
    * ========================================================================== */
 
   function toggleSourceMode() {
+    clearBlockSelection(false);
     state.sourceMode = !state.sourceMode;
     const wysiwygContainer = document.getElementById('wysiwyg-canvas');
     const sourceContainer = document.getElementById('source-editor-container');
@@ -3669,6 +5975,9 @@
       hideFloatingToolbar();
       return;
     }
+    if (hasCrossRange()) {
+      return;
+    }
 
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) {
@@ -4029,9 +6338,495 @@
     );
   }
 
+  function writePlainTextToClipboard(text) {
+    const bridge = document.getElementById('block-selection-bridge');
+    let copied = false;
+    if (bridge) {
+      bridge.value = text;
+      try {
+        bridge.focus({ preventScroll: true });
+      } catch (e) {
+        bridge.focus();
+      }
+      bridge.setSelectionRange(0, bridge.value.length);
+      try {
+        copied = document.execCommand('copy');
+      } catch (e) {}
+    }
+    if (!copied && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  }
+
+  function findBlockIdAtClientY(clientY) {
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (!canvas) return null;
+    const blockEls = Array.from(canvas.querySelectorAll(':scope > .mk-block'));
+    if (blockEls.length === 0) return null;
+
+    const firstRect = blockEls[0].getBoundingClientRect();
+    if (clientY <= firstRect.top) return blockEls[0].dataset.blockId;
+
+    const lastRect = blockEls[blockEls.length - 1].getBoundingClientRect();
+    if (clientY >= lastRect.bottom) return blockEls[blockEls.length - 1].dataset.blockId;
+
+    let closestId = blockEls[0].dataset.blockId;
+    let bestDist = Infinity;
+    for (const el of blockEls) {
+      const r = el.getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) {
+        return el.dataset.blockId;
+      }
+      const dist = clientY < r.top ? r.top - clientY : clientY - r.bottom;
+      if (dist < bestDist) {
+        bestDist = dist;
+        closestId = el.dataset.blockId;
+      }
+    }
+    return closestId;
+  }
+
+  function findBlockIdsIntersectingYBand(minY, maxY) {
+    const canvas = document.getElementById('wysiwyg-canvas');
+    if (!canvas) return [];
+    const ids = [];
+    canvas.querySelectorAll(':scope > .mk-block').forEach(el => {
+      const r = el.getBoundingClientRect();
+      if (r.bottom >= minY && r.top <= maxY && el.dataset.blockId) {
+        ids.push(el.dataset.blockId);
+      }
+    });
+    return ids;
+  }
+
   function bindGlobalEvents() {
+    let suppressNextCanvasClick = false;
+    let bridgeComposing = false;
+
     document.addEventListener('selectionchange', () => {
       requestAnimationFrame(updateFloatingToolbar);
+    });
+
+    // Floating Cross-Block Selection Action Pill (#block-selection-bar)
+    document.getElementById('block-selection-bar')?.addEventListener('mousedown', e => {
+      e.preventDefault(); // Keep focus on #block-selection-bridge
+      e.stopPropagation();
+      const btn = e.target.closest('button[data-bsel-act]');
+      if (!btn || !hasBlockSelection()) return;
+      const act = btn.dataset.bselAct;
+      const count = state.selectedBlockIds.size;
+      if (act === 'copy') {
+        writePlainTextToClipboard(getSelectedBlocksMarkdown());
+        syncBlockSelectionUI(true);
+        showToast(`已复制 ${count} 个块 Markdown`);
+      } else if (act === 'cut') {
+        writePlainTextToClipboard(getSelectedBlocksMarkdown());
+        deleteSelectedBlocks('backward');
+        showToast(`已剪切 ${count} 个块`);
+      } else if (act === 'duplicate') {
+        duplicateBlocksByIds();
+      } else if (act === 'move-up') {
+        moveBlocksByStep(-1);
+      } else if (act === 'move-down') {
+        moveBlocksByStep(1);
+      } else if (act === 'delete') {
+        deleteSelectedBlocks('backward');
+      } else if (act === 'clear') {
+        clearBlockSelection(true);
+      }
+    });
+
+    // Offscreen Native Clipboard & IME Bridge (#block-selection-bridge)
+    const selBridge = document.getElementById('block-selection-bridge');
+    if (selBridge) {
+      selBridge.addEventListener('copy', e => {
+        if (hasCrossRange()) {
+          const md = extractCrossRangeMarkdown();
+          if (e.clipboardData) {
+            e.preventDefault();
+            e.clipboardData.setData('text/plain', md);
+          }
+          showToast('已复制选中内容');
+          return;
+        }
+        if (!hasBlockSelection()) return;
+        const md = getSelectedBlocksMarkdown();
+        if (e.clipboardData) {
+          e.preventDefault();
+          e.clipboardData.setData('text/plain', md);
+        }
+        showToast(`已复制 ${state.selectedBlockIds.size} 个块 Markdown`);
+      });
+
+      selBridge.addEventListener('cut', e => {
+        if (hasCrossRange()) {
+          const md = extractCrossRangeMarkdown();
+          if (e.clipboardData) {
+            e.preventDefault();
+            e.clipboardData.setData('text/plain', md);
+          }
+          deleteCrossRange(null);
+          showToast('已剪切选中内容');
+          return;
+        }
+        if (!hasBlockSelection()) return;
+        const count = state.selectedBlockIds.size;
+        const md = getSelectedBlocksMarkdown();
+        if (e.clipboardData) {
+          e.preventDefault();
+          e.clipboardData.setData('text/plain', md);
+        }
+        deleteSelectedBlocks('backward');
+        showToast(`已剪切 ${count} 个块`);
+      });
+
+      selBridge.addEventListener('compositionstart', () => {
+        bridgeComposing = true;
+      });
+
+      const commitBridgeTypedReplacement = () => {
+        if (hasCrossRange()) {
+          const typed = selBridge.value || '';
+          deleteCrossRange(typed);
+          return;
+        }
+        if (!hasBlockSelection()) return;
+        const typed = selBridge.value || '';
+        const indices = getSelectedBlockIndices();
+        if (indices.length === 0) return;
+
+        recordUndoSnapshot();
+        const firstIdx = indices[0];
+        const selectedSet = new Set(state.selectedBlockIds);
+        const newPara = { id: Parser.nextBlockId(), type: 'paragraph', text: typed };
+        const remaining = [];
+        let inserted = false;
+        state.blocks.forEach((blk, idx) => {
+          if (selectedSet.has(blk.id)) {
+            if (!inserted && idx >= firstIdx) {
+              remaining.push(newPara);
+              inserted = true;
+            }
+          } else {
+            remaining.push(blk);
+          }
+        });
+        if (!inserted) remaining.push(newPara);
+
+        state.blocks = remaining;
+        clearBlockSelection(false);
+        ensureTrailingParagraph();
+        state.activeBlockId = newPara.id;
+        markDirtyAndSync(true);
+        renderCanvas();
+        focusBlockById(newPara.id, 'end');
+      };
+
+      selBridge.addEventListener('compositionend', () => {
+        bridgeComposing = false;
+        commitBridgeTypedReplacement();
+      });
+
+      selBridge.addEventListener('input', () => {
+        if (bridgeComposing || (!hasCrossRange() && !hasBlockSelection())) return;
+        commitBridgeTypedReplacement();
+      });
+
+      selBridge.addEventListener('keydown', e => {
+        if (!hasCrossRange() && !hasBlockSelection()) return;
+        const meta = e.metaKey || e.ctrlKey;
+        if (meta || e.altKey) return; // Let global shortcuts / native copy-cut-paste run
+
+        // 1. Character-accurate Cross-Block Text Range Active
+        if (hasCrossRange()) {
+          if (e.key === 'Backspace' || e.key === 'Delete') {
+            e.preventDefault();
+            e.stopPropagation();
+            deleteCrossRange(null);
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            clearCrossRange(true);
+            return;
+          }
+          if (e.key === 'Enter' && !e.isComposing) {
+            e.preventDefault();
+            e.stopPropagation();
+            const norm = normalizeCrossRange();
+            if (
+              norm &&
+              norm.start.blockIdx < norm.end.blockIdx &&
+              isTextMergeableType(state.blocks[norm.start.blockIdx]?.type) &&
+              isTextMergeableType(state.blocks[norm.end.blockIdx]?.type)
+            ) {
+              recordUndoSnapshot();
+              clearCrossRange(false);
+              const bS = state.blocks[norm.start.blockIdx];
+              const bE = state.blocks[norm.end.blockIdx];
+              bS.text = (bS.text || '').slice(0, norm.start.mdOffset || 0);
+              bE.text = (bE.text || '').slice(norm.end.mdOffset || 0);
+              if (norm.end.blockIdx - norm.start.blockIdx > 1) {
+                state.blocks.splice(norm.start.blockIdx + 1, norm.end.blockIdx - norm.start.blockIdx - 1);
+              }
+              ensureTrailingParagraph();
+              state.activeBlockId = bE.id;
+              markDirtyAndSync(true);
+              renderCanvas();
+              focusBlockById(bE.id, 0);
+            } else {
+              deleteCrossRange('');
+            }
+            return;
+          }
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.shiftKey) {
+              const nextFocus = stepEndpointByArrow(state.crossRange.focus, e.key);
+              if (nextFocus) {
+                setCrossRange(state.crossRange.anchor, nextFocus, true);
+                const domEl = document.querySelector(`[data-block-id="${nextFocus.blockId}"]`);
+                domEl?.scrollIntoView({ block: 'nearest' });
+              }
+            } else {
+              const norm = normalizeCrossRange();
+              clearCrossRange(false);
+              if (norm) {
+                const targetEp = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? norm.start : norm.end;
+                focusAtEndpoint(targetEp);
+              }
+            }
+            return;
+          }
+          return;
+        }
+
+        // 2. Explicit Whole-Block Selection Active
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+          e.preventDefault();
+          e.stopPropagation();
+          deleteSelectedBlocks(e.key === 'Delete' ? 'forward' : 'backward');
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          clearBlockSelection(true);
+          return;
+        }
+        if (e.key === 'Enter' && !e.isComposing) {
+          e.preventDefault();
+          e.stopPropagation();
+          const ordered = getSelectedBlocksOrdered();
+          if (ordered.length === 1) {
+            const targetId = ordered[0].id;
+            clearBlockSelection(false);
+            insertBlockAfter(targetId, { id: Parser.nextBlockId(), type: 'paragraph', text: '' }, 'start');
+          } else {
+            replaceSelectedBlocksWithMarkdown('');
+          }
+          return;
+        }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.shiftKey && e.key === 'ArrowUp') {
+            extendBlockSelectionByStep(-1);
+          } else {
+            const ordered = getSelectedBlocksOrdered();
+            const firstId = ordered[0]?.id || state.activeBlockId;
+            clearBlockSelection(false);
+            if (firstId) focusBlockById(firstId, 'start');
+          }
+          return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.shiftKey && e.key === 'ArrowDown') {
+            extendBlockSelectionByStep(1);
+          } else {
+            const ordered = getSelectedBlocksOrdered();
+            const lastId = ordered[ordered.length - 1]?.id || state.activeBlockId;
+            clearBlockSelection(false);
+            if (lastId) focusBlockById(lastId, 'end');
+          }
+        }
+      });
+    }
+
+    // Cross-Block Mouse Selection:
+    // - Dragging text across blocks / Shift+Click inside text -> Character-accurate Cross-Block Text Selection!
+    // - Dragging in blank left/right margin -> Whole-Block Lasso Selection!
+    const scroller = document.getElementById('editor-scroll-container');
+    const dragSel = {
+      active: false,
+      startX: 0,
+      startY: 0,
+      originBlockId: null,
+      originEditable: null,
+      anchorEndpoint: null,
+      startedInMargin: false,
+      isCrossTextDragging: false,
+      isMarginBlockDragging: false
+    };
+
+    scroller?.addEventListener('mousedown', e => {
+      if (e.button !== 0 || state.sourceMode) return;
+      if (e.target.closest('#source-editor-container')) return;
+      if (e.target.closest('button, select, input, a, .mk-block-gutter')) return;
+
+      const clickedBlockEl = e.target.closest('.mk-block');
+      const clickedBlockId = clickedBlockEl?.dataset.blockId || null;
+
+      // Shift + Click:
+      // - If already in explicit whole-block selection mode (or clicked in margin while blocks selected), extend block range
+      // - Otherwise perform character-accurate Cross-Block Text Selection from current caret to clicked point!
+      if (e.shiftKey) {
+        if (hasBlockSelection()) {
+          const anchorId = state.selectionAnchorBlockId || state.activeBlockId;
+          const targetId = clickedBlockId || findBlockIdAtClientY(e.clientY);
+          if (anchorId && targetId) {
+            e.preventDefault();
+            suppressNextCanvasClick = true;
+            setTimeout(() => { suppressNextCanvasClick = false; }, 80);
+            setBlockRangeSelection(anchorId, targetId, true);
+            return;
+          }
+        } else {
+          const anchorEp = hasCrossRange() ? state.crossRange.anchor : getCurrentCaretEndpoint(true);
+          const focusEp = resolveEndpointFromPoint(e.clientX, e.clientY);
+          if (anchorEp && focusEp && (hasCrossRange() || !isSameSubEditable(anchorEp, focusEp))) {
+            e.preventDefault();
+            suppressNextCanvasClick = true;
+            setTimeout(() => { suppressNextCanvasClick = false; }, 80);
+            setCrossRange(anchorEp, focusEp, true);
+            return;
+          }
+        }
+      }
+
+      // Cmd + Click while in explicit whole-block selection mode -> Toggle individual block
+      if ((e.metaKey || e.ctrlKey) && clickedBlockId && hasBlockSelection()) {
+        e.preventDefault();
+        suppressNextCanvasClick = true;
+        setTimeout(() => { suppressNextCanvasClick = false; }, 80);
+        toggleSingleBlockSelection(clickedBlockId);
+        return;
+      }
+
+      // Normal click clears any prior cross-block / multi-block selection before starting fresh interaction
+      if (hasCrossRange()) {
+        clearCrossRange(false);
+      }
+      if (hasBlockSelection()) {
+        clearBlockSelection(false);
+      }
+
+      dragSel.active = true;
+      dragSel.startX = e.clientX;
+      dragSel.startY = e.clientY;
+      dragSel.originBlockId = clickedBlockId || findBlockIdAtClientY(e.clientY);
+      dragSel.originEditable = clickedBlockEl
+        ? e.target.closest('.mk-editable, .mk-code-textarea, .mk-special-textarea, th, td')
+        : null;
+      dragSel.anchorEndpoint = clickedBlockEl ? resolveEndpointFromPoint(e.clientX, e.clientY) : null;
+      dragSel.startedInMargin = !clickedBlockId;
+      dragSel.isCrossTextDragging = false;
+      dragSel.isMarginBlockDragging = false;
+      if (dragSel.startedInMargin) {
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('mousemove', ev => {
+      if (!dragSel.active) return;
+      if ((ev.buttons & 1) === 0) {
+        dragSel.active = false;
+        document.body.classList.remove('is-block-selecting');
+        return;
+      }
+
+      const dist = Math.hypot(ev.clientX - dragSel.startX, ev.clientY - dragSel.startY);
+      if (dist < 5) return;
+
+      if (dragSel.startedInMargin) {
+        const minY = Math.min(dragSel.startY, ev.clientY);
+        const maxY = Math.max(dragSel.startY, ev.clientY);
+        const hitIds = findBlockIdsIntersectingYBand(minY, maxY);
+        if (hitIds.length > 0) {
+          dragSel.isMarginBlockDragging = true;
+          document.body.classList.add('is-block-selecting');
+          const anchor = ev.clientY >= dragSel.startY ? hitIds[0] : hitIds[hitIds.length - 1];
+          const focus = ev.clientY >= dragSel.startY ? hitIds[hitIds.length - 1] : hitIds[0];
+          setBlockRangeSelection(anchor, focus, false);
+        }
+      } else {
+        const hoveredEditable = ev.target?.nodeType === 1
+          ? ev.target.closest?.('.mk-editable, .mk-code-textarea, .mk-special-textarea, th, td')
+          : null;
+        const hoveredBlockEl = ev.target?.nodeType === 1 ? ev.target.closest?.('.mk-block') : null;
+
+        if (!dragSel.isCrossTextDragging) {
+          // Stay 100% out of WebKit's way while dragging inside the SAME editable!
+          if (dragSel.originEditable && hoveredEditable === dragSel.originEditable) {
+            return;
+          }
+          if (!dragSel.originEditable && hoveredBlockEl?.dataset.blockId === dragSel.originBlockId) {
+            return;
+          }
+          if (!dragSel.anchorEndpoint) {
+            dragSel.anchorEndpoint = resolveEndpointFromPoint(dragSel.startX, dragSel.startY);
+          }
+          dragSel.isCrossTextDragging = true;
+          document.body.classList.add('is-block-selecting');
+        }
+
+        const focusEp = resolveEndpointFromPoint(ev.clientX, ev.clientY);
+        if (dragSel.anchorEndpoint && focusEp) {
+          setCrossRange(dragSel.anchorEndpoint, focusEp, false);
+        }
+      }
+
+      // Smooth viewport auto-scroll when dragging near top/bottom edge of editor scroller
+      if ((dragSel.isCrossTextDragging || dragSel.isMarginBlockDragging) && scroller) {
+        const sr = scroller.getBoundingClientRect();
+        const edgeZone = 46;
+        if (ev.clientY < sr.top + edgeZone) {
+          scroller.scrollTop -= 14;
+        } else if (ev.clientY > sr.bottom - edgeZone) {
+          scroller.scrollTop += 14;
+        }
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!dragSel.active) return;
+      const wasCrossText = dragSel.isCrossTextDragging;
+      const wasMarginBlock = dragSel.isMarginBlockDragging;
+      dragSel.active = false;
+      dragSel.isCrossTextDragging = false;
+      dragSel.isMarginBlockDragging = false;
+      document.body.classList.remove('is-block-selecting');
+
+      if (wasCrossText) {
+        suppressNextCanvasClick = true;
+        setTimeout(() => { suppressNextCanvasClick = false; }, 80);
+        const norm = normalizeCrossRange();
+        if (!norm || norm.collapsed) {
+          clearCrossRange(false);
+        } else if (isSameSubEditable(norm.start, norm.end)) {
+          restoreIntraEditableSelectionFromCrossRange();
+        } else {
+          syncCrossRangeUI(true);
+        }
+      } else if (wasMarginBlock) {
+        suppressNextCanvasClick = true;
+        setTimeout(() => { suppressNextCanvasClick = false; }, 80);
+        syncBlockSelectionUI(true);
+      }
     });
 
     // Click inline Markdown images to open Lightbox zoom preview
@@ -4044,7 +6839,8 @@
     });
 
     // Click in blank space below last block, above first block, or between blocks to insert/focus a paragraph
-    document.getElementById('editor-scroll-container')?.addEventListener('click', e => {
+    scroller?.addEventListener('click', e => {
+      if (suppressNextCanvasClick || hasBlockSelection() || hasCrossRange()) return;
       if (state.sourceMode) return;
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed) return;
@@ -4108,19 +6904,53 @@
       }
     });
 
-    // Clipboard Image Paste -> Save to local ./assets/ and insert Image Block
+    // Clipboard Image & Multi-Block Markdown Paste
     document.addEventListener('paste', async e => {
       const items = e.clipboardData?.items;
-      if (!items) return;
-      for (const item of items) {
-        if (item.kind === 'file' && item.type.startsWith('image/')) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            await insertImageFileAsAsset(file);
+      if (items) {
+        for (const item of items) {
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            e.preventDefault();
+            const file = item.getAsFile();
+            if (file) {
+              if (hasCrossRange()) clearCrossRange(false);
+              if (hasBlockSelection()) clearBlockSelection(false);
+              await insertImageFileAsAsset(file);
+            }
+            return;
           }
-          return;
         }
+      }
+
+      if (state.sourceMode) return;
+
+      const rawText = e.clipboardData?.getData('text/plain');
+      if (rawText === undefined || rawText === null) return;
+
+      // 0. Pasting while a character-accurate Cross-Block Text Selection is active -> replace exact slice!
+      if (hasCrossRange()) {
+        e.preventDefault();
+        replaceCrossRangeWithMarkdown(rawText);
+        showToast('已粘贴并替换选中内容');
+        return;
+      }
+
+      // 1. Pasting while one or more whole blocks are selected -> replace selected blocks with parsed Markdown blocks
+      if (hasBlockSelection()) {
+        e.preventDefault();
+        replaceSelectedBlocksWithMarkdown(rawText);
+        showToast('已粘贴并替换选中块');
+        return;
+      }
+
+      // 2. Pasting inside a WYSIWYG .mk-editable -> clean plain/Markdown paste (supports multi-block!)
+      const activeEl = document.activeElement;
+      const editable = activeEl?.classList?.contains('mk-editable')
+        ? activeEl
+        : activeEl?.closest?.('.mk-editable');
+      if (editable) {
+        e.preventDefault();
+        handlePasteMarkdownIntoEditable(editable, rawText);
       }
     });
 
@@ -4218,7 +7048,7 @@
       const meta = e.metaKey || e.ctrlKey;
       const keyLower = e.key.toLowerCase();
 
-      // Escape closes Lightbox, Context Menu, Quick Open, or Find Bar
+      // Escape closes Lightbox, Context Menu, Quick Open, Find Bar, or Cross-Block Selection
       if (e.key === 'Escape') {
         const lightbox = document.getElementById('image-lightbox');
         if (lightbox && !lightbox.classList.contains('hidden')) {
@@ -4240,6 +7070,68 @@
         if (state.findBarOpen) {
           e.preventDefault();
           closeFindBar();
+          return;
+        }
+        if (hasCrossRange()) {
+          e.preventDefault();
+          clearCrossRange(true);
+          return;
+        }
+        if (hasBlockSelection()) {
+          e.preventDefault();
+          clearBlockSelection(true);
+          return;
+        }
+      }
+
+      // Fallback cross-block keyboard actions if focus wandered off #block-selection-bridge
+      if (
+        (hasCrossRange() || hasBlockSelection()) &&
+        !state.sourceMode &&
+        !(e.target && e.target.tagName === 'INPUT')
+      ) {
+        if (!meta && !e.altKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+          e.preventDefault();
+          if (hasCrossRange()) deleteCrossRange(null);
+          else deleteSelectedBlocks(e.key === 'Delete' ? 'forward' : 'backward');
+          return;
+        }
+        if (!meta && !e.altKey && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault();
+          if (hasCrossRange()) {
+            const nextFocus = stepEndpointByArrow(state.crossRange.focus, e.key);
+            if (nextFocus) setCrossRange(state.crossRange.anchor, nextFocus, true);
+          } else {
+            extendBlockSelectionByStep(e.key === 'ArrowUp' ? -1 : 1);
+          }
+          return;
+        }
+      }
+
+      // Cmd + A : Progressive Select All (Active Block Text -> All Blocks in Document)
+      if (meta && !e.shiftKey && !e.altKey && keyLower === 'a') {
+        if (e.target && e.target.tagName === 'INPUT') {
+          return;
+        }
+        e.preventDefault();
+        handleSelectAllCommand();
+        return;
+      }
+
+      // Cmd + D : Duplicate Selected Block(s) or Active Block
+      if (meta && !e.shiftKey && !e.altKey && keyLower === 'd') {
+        if (!state.sourceMode && !(e.target && e.target.tagName === 'INPUT')) {
+          e.preventDefault();
+          duplicateBlocksByIds();
+          return;
+        }
+      }
+
+      // Alt + ArrowUp / Alt + ArrowDown : Move Selected Block(s) or Active Block Up / Down
+      if (!meta && e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        if (!state.sourceMode && !(e.target && e.target.tagName === 'INPUT')) {
+          e.preventDefault();
+          moveBlocksByStep(e.key === 'ArrowUp' ? -1 : 1);
           return;
         }
       }
@@ -4412,6 +7304,7 @@
         case 'exportPDF': handleExportPDF(); break;
         case 'undo': performUndo(); break;
         case 'redo': performRedo(); break;
+        case 'selectAll': handleSelectAllCommand(); break;
         case 'find': openFindBar(false); break;
         case 'toggleSource': toggleSourceMode(); break;
         case 'toggleSidebar': document.getElementById('btn-toggle-sidebar')?.click(); break;
@@ -4439,6 +7332,33 @@
       }
       loadDocument(data.file.path, data.file.name, data.file.content);
       showToast(`已打开 ${data.file.name}`);
+    };
+
+    // Programmatic Controller API for Automated Test Suite Verification
+    global.__markoraTestApi = {
+      getState: () => state,
+      loadDocument,
+      setCrossRange,
+      clearCrossRange,
+      extractCrossRangeMarkdown,
+      deleteCrossRange,
+      replaceCrossRangeWithMarkdown,
+      applyInlineFormattingToCrossRange,
+      selectSingleBlock,
+      toggleSingleBlockSelection,
+      setBlockRangeSelection,
+      selectAllBlocks,
+      clearBlockSelection,
+      extendBlockSelectionByStep,
+      deleteSelectedBlocks,
+      deleteBlock,
+      duplicateBlocksByIds,
+      moveBlocksByStep,
+      replaceSelectedBlocksWithMarkdown,
+      getSelectedBlocksMarkdown,
+      handleSelectAllCommand,
+      performUndo,
+      performRedo
     };
   }
 

@@ -1,18 +1,25 @@
 name: Release macOS App
 
 on:
+  release:
+    types: [published, created]
   push:
     tags:
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. v1.0.0)'
+        description: 'Release version tag (e.g. v1.0.1)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release-macos:
@@ -31,10 +38,13 @@ jobs:
         id: meta
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            VER="${{ github.event.inputs.version }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            VER="${{ github.event.release.tag_name }}"
           else
-            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            VER="${GITHUB_REF_NAME}"
           fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
       - name: Build & Package Universal DMG and ZIP
         run: |
@@ -42,7 +52,18 @@ jobs:
           sh scripts/package_release.sh "${{ steps.meta.outputs.version }}"
           ls -lh dist/
 
-      - name: Publish GitHub Release
+      - name: Upload DMG & ZIP to GitHub Release (existing web release)
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
+
+      - name: Publish GitHub Release (from tag push or manual dispatch)
+        if: github.event_name != 'release'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.version }}

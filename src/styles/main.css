@@ -1041,8 +1041,16 @@ body.focus-mode .mk-block {
   transition: opacity 0.2s ease;
 }
 
-body.focus-mode .mk-block.is-active {
+body.focus-mode .mk-block.is-active,
+body.focus-mode .mk-block.is-selected {
   opacity: 1;
+}
+
+body.is-block-selecting .wysiwyg-canvas,
+body.is-block-selecting .mk-editable,
+body.is-block-selecting textarea {
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 /* Block Wrapper & Left Gutter Indicator */
@@ -2387,8 +2395,253 @@ body.focus-mode .mk-block.is-active {
   opacity: 0.92;
 }
 
+/* Cross-Block Selection Highlight & Floating Action Pill */
+.mk-block.is-selected::after {
+  content: "";
+  position: absolute;
+  inset: -4px -10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  border: 1.5px solid var(--accent-color);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.mk-block.is-selected .mk-block-gutter {
+  opacity: 1;
+  color: var(--accent-color);
+  background: var(--accent-soft);
+}
+
+#block-selection-bridge {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.block-selection-bar {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 950;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-popover);
+  font-size: 12px;
+  color: var(--text-primary);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.block-sel-count {
+  padding: 0 6px;
+  font-weight: 600;
+  color: var(--accent-color);
+  white-space: nowrap;
+}
+
+.block-sel-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border-subtle);
+  margin: 0 2px;
+}
+
+.block-selection-bar button {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.block-selection-bar button:hover {
+  background: var(--bg-hover);
+}
+
+.block-selection-bar button.is-danger {
+  color: #cf222e;
+}
+
+:root[data-theme="night-dark"] .block-selection-bar button.is-danger,
+:root[data-theme="nord-minimal"] .block-selection-bar button.is-danger {
+  color: #ff7b72;
+}
+
+.block-selection-bar button.is-danger:hover {
+  background: rgba(207, 34, 46, 0.12);
+}
+
+.block-selection-bar button.is-muted {
+  color: var(--text-muted);
+  padding: 4px 6px;
+}
+
+/* Danger / Delete buttons on Special Blocks & Gutter Menu */
+.mk-code-btn.is-danger,
+.mk-table-btns button.is-danger,
+.mk-callout-del-btn,
+.mk-math-del-btn {
+  color: var(--text-muted);
+  transition: color 0.14s ease, background 0.14s ease;
+}
+
+.mk-code-btn.is-danger:hover,
+.mk-table-btns button.is-danger:hover,
+.mk-callout-del-btn:hover,
+.mk-math-del-btn:hover {
+  color: #cf222e !important;
+  border-color: rgba(207, 34, 46, 0.35) !important;
+  background: rgba(207, 34, 46, 0.09) !important;
+}
+
+:root[data-theme="night-dark"] .mk-code-btn.is-danger:hover,
+:root[data-theme="night-dark"] .mk-table-btns button.is-danger:hover,
+:root[data-theme="night-dark"] .mk-callout-del-btn:hover,
+:root[data-theme="night-dark"] .mk-math-del-btn:hover {
+  color: #ff7b72 !important;
+}
+
+.mk-callout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mk-callout-header-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mk-callout-del-btn,
+.mk-math-del-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.mk-callout:hover .mk-callout-del-btn,
+.mk-block.is-active .mk-callout-del-btn,
+.mk-mathblock:hover .mk-math-del-btn,
+.mk-block.is-active .mk-math-del-btn {
+  opacity: 0.85;
+}
+
+.mk-mathblock {
+  position: relative;
+}
+
+.mk-math-hover-actions {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  gap: 4px;
+  z-index: 3;
+}
+
+.slash-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 6px;
+}
+
+.slash-item.is-danger .slash-title,
+.slash-item.is-danger .slash-icon {
+  color: #cf222e;
+}
+
+:root[data-theme="night-dark"] .slash-item.is-danger .slash-title,
+:root[data-theme="night-dark"] .slash-item.is-danger .slash-icon {
+  color: #ff7b72;
+}
+
+/* Character-Accurate Cross-Block Text Selection (WebKit Custom Highlight API + Rect Fallback) */
+::highlight(mk-cross-sel) {
+  background-color: rgba(37, 99, 235, 0.25);
+  color: inherit;
+}
+
+:root[data-theme="night-dark"] ::highlight(mk-cross-sel),
+:root[data-theme="nord-minimal"] ::highlight(mk-cross-sel) {
+  background-color: rgba(96, 165, 250, 0.34);
+  color: inherit;
+}
+
+#editor-scroll-container {
+  position: relative;
+}
+
+.cross-selection-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.cross-sel-rect {
+  position: absolute;
+  background: rgba(37, 99, 235, 0.23);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+:root[data-theme="night-dark"] .cross-sel-rect,
+:root[data-theme="nord-minimal"] .cross-sel-rect {
+  background: rgba(96, 165, 250, 0.3);
+}
+
+.mk-block.is-range-covered::after {
+  content: '';
+  position: absolute;
+  inset: -2px -6px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.14);
+  pointer-events: none;
+  z-index: 1;
+}
+
+:root[data-theme="night-dark"] .mk-block.is-range-covered::after,
+:root[data-theme="nord-minimal"] .mk-block.is-range-covered::after {
+  background: rgba(96, 165, 250, 0.2);
+}
+
+body.focus-mode .mk-block.is-range-covered {
+  opacity: 1;
+}
+
 /* Print / PDF Styles */
 @media print {
+  #cross-selection-overlay,
+  #block-selection-bar,
+  #block-selection-bridge,
+  .mk-callout-del-btn,
+  .mk-math-hover-actions,
   #sidebar,
   #sidebar-resizer,
   #top-titlebar,
